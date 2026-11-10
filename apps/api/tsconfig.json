@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "baseUrl": ".",
+    "paths": {
+      "@media-intel/types": ["../../packages/types/src/index.ts"]
+    }
+  },
+  "include": ["src", "drizzle.config.ts"]
+}

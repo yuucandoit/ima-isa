@@ -1,0 +1,7 @@
+# Optional AI stack. The pipeline degrades gracefully when these are absent:
+# sentiment falls back to a lexicon model, NER to gazetteer rules, and
+# embeddings to deterministic hashing vectors.
+torch>=2.4,<3
+transformers>=4.46,<5
+sentencepiece>=0.2
+spacy>=3.8,<4

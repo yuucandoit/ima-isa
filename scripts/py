@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Menjalankan perintah Python worker dengan virtualenv project.
+# Dipakai oleh script Bun: `bun run worker`, `worker:poll`, `worker:social`,
+# `worker:cluster`, dan `test:worker`.
+#
+# Override interpreter lewat env PYTHON, mis.:
+#   PYTHON=/opt/homebrew/bin/python3.12 bun run worker:poll
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT/services/worker-ai"
+
+if [[ -n "${PYTHON:-}" ]]; then
+  exec "$PYTHON" "$@"
+fi
+
+if [[ -x ".venv/bin/python" ]]; then
+  exec ".venv/bin/python" "$@"
+fi
+
+printf '%s\n' \
+  '[worker] Virtualenv Python belum tersedia di services/worker-ai/.venv' \
+  '' \
+  'Jalankan sekali:' \
+  '  bun run worker:setup            # dependencies inti (ringan)' \
+  '  bun run worker:setup:ai         # opsional: torch + spaCy + IndoBERT' \
+  '' \
+  'Atau buat manual:' \
+  '  cd services/worker-ai' \
+  '  python3.12 -m venv .venv' \
+  '  .venv/bin/pip install -r requirements.txt' >&2
+
+exit 1

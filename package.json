@@ -1,0 +1,42 @@
+{
+  "name": "media-intel-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Indonesia Intelligence Media & Social Media Analysis Engine",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,magenta \"bun run --cwd apps/api dev\" \"bun run --cwd apps/web dev\"",
+    "dev:api": "bun run --cwd apps/api dev",
+    "dev:web": "bun run --cwd apps/web dev",
+    "build": "bun run --cwd packages/types build && bun run --cwd apps/web build",
+    "typecheck": "bun run --cwd apps/api typecheck && bun run --cwd apps/web typecheck",
+    "db:generate": "bun run --cwd apps/api db:generate",
+    "db:migrate": "bun run --cwd apps/api db:migrate",
+    "db:push": "bun run --cwd apps/api db:push",
+    "db:seed": "bun run --cwd apps/api db:seed",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f postgres redis",
+    "worker": "bash scripts/py -m main",
+    "worker:poll": "bash scripts/py -m scrapers.rss_poller",
+    "worker:cluster": "bash scripts/py -m cluster_worker",
+    "test": "bun run --cwd apps/api test",
+    "test:worker": "bash scripts/py -m unittest discover -s tests -v",
+    "worker:social": "bash scripts/py -m scrapers.social_poller",
+    "worker:setup": "cd services/worker-ai && (python3.12 -m venv .venv || python3.11 -m venv .venv || python3 -m venv .venv) && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt",
+    "worker:setup:ai": "cd services/worker-ai && .venv/bin/pip install -r requirements-ai.txt && .venv/bin/python -m spacy download id_core_news_lg",
+    "dev:worker": "concurrently -n ai,poll,social,cluster -c green,yellow,blue,red \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\"",
+    "dev:all": "concurrently -n api,web,ai,poll,social,cluster -c cyan,magenta,green,yellow,blue,red \"bun run dev:api\" \"bun run dev:web\" \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  }
+}

@@ -118,6 +118,26 @@ def strip_html(text: str) -> str:
     return html.unescape(TAG_RE.sub(" ", text))
 
 
+def clean_body(text: str) -> str:
+    """Seperti clean_text, tapi membiarkan jeda paragraf (dipisah satu baris kosong).
+
+    Dipakai untuk badan artikel agar detail berita tetap terbaca, bukan satu
+    baris panjang.
+    """
+    if not text:
+        return ""
+    value = html.unescape(text)
+    value = URL_RE.sub(" ", value)
+    value = value.replace("\u00a0", " ")
+    value = "".join(
+        character
+        for character in unicodedata.normalize("NFKC", value)
+        if character == "\n" or not unicodedata.category(character).startswith("C")
+    )
+    lines = (WHITESPACE_RE.sub(" ", line).strip() for line in value.splitlines())
+    return "\n\n".join(line for line in lines if line)
+
+
 def clean_text(text: str) -> str:
     """Remove markup, URLs, mentions and collapse whitespace (keeps casing)."""
     if not text:

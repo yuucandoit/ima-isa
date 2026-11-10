@@ -22,7 +22,7 @@ import db
 from config import settings
 from nlp.embedder import get_embedder
 from nlp.ner import get_extractor
-from nlp.normalizer import clean_text, extract_hashtags, summarize_text
+from nlp.normalizer import clean_body, clean_text, extract_hashtags, summarize_text
 from nlp.sentiment import get_analyzer
 
 logging.basicConfig(
@@ -109,7 +109,7 @@ class AIWorker:
     def process(self, raw_payload: str) -> dict[str, Any] | None:
         payload = json.loads(raw_payload)
         title = clean_text(str(payload.get("title") or ""))
-        content = clean_text(str(payload.get("content") or payload.get("summary") or ""))
+        content = clean_body(str(payload.get("content") or payload.get("summary") or ""))
         if not title:
             raise ValueError("payload tanpa judul")
 

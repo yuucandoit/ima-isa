@@ -24,6 +24,7 @@ from nlp.embedder import get_embedder
 from nlp.ner import get_extractor
 from nlp.normalizer import clean_body, clean_text, extract_hashtags, summarize_text
 from nlp.sentiment import get_analyzer
+from scrapers.body_cleaner import normalize_article_body
 
 logging.basicConfig(
     level=logging.INFO,
@@ -112,6 +113,16 @@ class AIWorker:
         content = clean_body(str(payload.get("content") or payload.get("summary") or ""))
         if not title:
             raise ValueError("payload tanpa judul")
+        if payload.get("platform", "NEWS_MEDIA") == "NEWS_MEDIA":
+            # Buang chrome situs / metadata redaksi yang masih menempel.
+            cleaned = normalize_article_body(
+                content,
+                title=title,
+                source=payload.get("sourceName"),
+                domain=payload.get("domain"),
+            )
+            if len(cleaned) >= 80 or len(content) < 80:
+                content = cleaned
 
         analysis_text = f"{title}. {content}"[: settings.max_analysis_chars]
         sentiment = self.sentiment.analyze(analysis_text)

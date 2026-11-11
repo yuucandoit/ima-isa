@@ -79,7 +79,7 @@ def build_payload(
     author = clean_text(getattr(entry, "author", "") or "") or None
 
     if fulltext and source.fulltext_supported:
-        extracted = extract_article(url)
+        extracted = extract_article(url, title=title)
         if extracted.get("text") and len(str(extracted["text"])) > len(summary):
             content = str(extracted["text"])
         author = author or (str(extracted["author"]) if extracted.get("author") else None)

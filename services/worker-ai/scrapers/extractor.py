@@ -10,6 +10,7 @@ import requests
 
 from config import settings
 from nlp.normalizer import clean_body
+from scrapers.body_cleaner import looks_like_code, normalize_article_body
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +30,12 @@ BLOCK_END_RE = re.compile(
     re.S | re.I,
 )
 
-# Penanda bahwa "teks" hasil ekstraksi sebenarnya kode / CSS, bukan prosa.
-CODE_HINT_RE = re.compile(
-    r"window\.[A-Za-z_$]|function\s*\(|=>|\b(?:var|const|let)\s+[A-Za-z_$]+\s*="
-    r"|!important|@media|/\*!|\bdisplay\s*:\s*(?:flex|none)|\\u002F"
-)
-SYMBOL_RE = re.compile(r"[{}()\[\]<>;=|&$@\\^~`]")
-
 MIN_FALLBACK_CHARS = 240
 MAX_FALLBACK_CHARS = 12000
 
 
-def fetch_html(url: str) -> str | None:
+def fetch_html(url: str, *, status: dict[str, int | None] | None = None) -> str | None:
+    """Ambil HTML; `status` (opsional) diisi kode HTTP untuk diagnosis."""
     try:
         response = requests.get(
             url,
@@ -51,6 +46,8 @@ def fetch_html(url: str) -> str | None:
             },
             timeout=settings.rss_timeout_seconds,
         )
+        if status is not None:
+            status["code"] = response.status_code
         if response.ok and "text/html" in response.headers.get("Content-Type", ""):
             return response.text
     except requests.RequestException as error:
@@ -66,16 +63,6 @@ def _strip_noise_blocks(markup: str) -> str:
         if cleaned == value:
             return value
         value = cleaned
-
-
-def looks_like_code(text: str) -> bool:
-    """True bila teks lebih mirip JS/CSS ketimbang prosa berita."""
-    if not text:
-        return True
-    sample = text[:4000]
-    hints = len(CODE_HINT_RE.findall(sample))
-    density = len(SYMBOL_RE.findall(sample)) / max(len(sample), 1)
-    return hints >= 2 or density > 0.03
 
 
 def _densest_block(html: str):
@@ -127,10 +114,22 @@ def _fallback_text(html: str) -> str | None:
     return text
 
 
-def extract_article(url: str) -> dict[str, str | None]:
-    """Return `{title, text, author, date}` — empty text when extraction fails."""
-    result: dict[str, str | None] = {"title": None, "text": None, "author": None, "date": None}
-    html = fetch_html(url)
+def extract_article(url: str, title: str | None = None) -> dict[str, str | None]:
+    """Return `{title, text, author, date}` — empty text when extraction fails.
+
+    `title` (opsional) dipakai untuk membuang judul yang diulang di badan artikel
+    serta baris chrome situs ("detikNews", "ADVERTISEMENT", dsb).
+    """
+    result: dict[str, str | int | None] = {
+        "title": None,
+        "text": None,
+        "author": None,
+        "date": None,
+        "status": None,
+    }
+    status: dict[str, int | None] = {}
+    html = fetch_html(url, status=status)
+    result["status"] = status.get("code")
     if not html:
         return result
 
@@ -157,5 +156,12 @@ def extract_article(url: str) -> dict[str, str | None]:
 
     if not result["text"]:
         result["text"] = _fallback_text(html)
+
+    if result["text"]:
+        cleaned = normalize_article_body(
+            result["text"], title=title or result["title"], domain=url
+        )
+        if len(cleaned) >= MIN_FALLBACK_CHARS:
+            result["text"] = cleaned
 
     return result

@@ -1,21 +1,42 @@
 import { Elysia, t } from 'elysia'
+import { markTrendInterest } from '../../lib/redis'
 import { getFigureTrending, getSocialTrending } from './service'
 
 export const trendingRoutes = new Elysia({ prefix: '/trending', tags: ['Trending'] })
   .get(
     '/social',
-    ({ query }) =>
-      getSocialTrending({
+    async ({ query }) => {
+      const result = await getSocialTrending({
         window: query.window,
         limit: query.limit,
-      }),
+        platform: query.platform,
+        sort: query.sort,
+        hours: query.hours,
+      })
+      // Beri sinyal ke worker bahwa ada penonton (hemat bandwidth scrape).
+      for (const platform of ['google', 'tiktok', 'x']) {
+        markTrendInterest(platform)
+      }
+      return result
+    },
     {
       query: t.Object({
         window: t.Optional(t.Union([t.Literal('24h'), t.Literal('7d')])),
         limit: t.Optional(t.Numeric({ minimum: 1, maximum: 50 })),
+        platform: t.Optional(
+          t.Union([
+            t.Literal('TWITTER_X'),
+            t.Literal('TIKTOK'),
+            t.Literal('GOOGLE_TRENDS'),
+          ]),
+        ),
+        sort: t.Optional(t.Union([t.Literal('volume'), t.Literal('rank')])),
+        hours: t.Optional(t.Numeric({ minimum: 4, maximum: 168 })),
       }),
       detail: {
-        summary: 'Trending sosial: X Trends API + hashtag dari post ter-ingest',
+        summary:
+          'Trending: X, TikTok, Google Trends + hashtag dari post ter-ingest '
+          + '(default urut volume: approx_traffic Google, tayangan TikTok, sebutan hashtag)',
       },
     },
   )
@@ -46,6 +67,7 @@ export const trendingRoutes = new Elysia({ prefix: '/trending', tags: ['Trending
             t.Literal('TWITTER_X'),
             t.Literal('YOUTUBE'),
             t.Literal('TIKTOK'),
+            t.Literal('GOOGLE_TRENDS'),
           ]),
         ),
       }),

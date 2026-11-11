@@ -116,6 +116,7 @@ export const PLATFORM_LABEL: Record<SourcePlatform, string> = {
   TWITTER_X: 'X / Twitter',
   YOUTUBE: 'YouTube',
   TIKTOK: 'TikTok',
+  GOOGLE_TRENDS: 'Google Trends',
 }
 
 export type RangePreset = '24h' | '7d' | '30d'

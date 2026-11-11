@@ -31,15 +31,16 @@ Dashboard (React 19)     Vite · Tailwind · Recharts · MapLibre GL
 1. [Arsitektur & komponen](#1-arsitektur--komponen)
 2. [Prasyarat](#2-prasyarat)
 3. [Quick start](#3-quick-start)
-4. [Struktur monorepo](#4-struktur-monorepo)
-5. [Skema database](#5-skema-database)
-6. [API reference](#6-api-reference)
-7. [Fitur per modul](#7-fitur-per-modul)
-8. [Sumber data](#8-sumber-data)
-9. [Perintah](#9-perintah)
-10. [Konfigurasi](#10-konfigurasi)
-11. [Catatan operasional](#11-catatan-operasional)
-12. [Smoke test](#12-smoke-test)
+4. [Setup server Ubuntu](#4-setup-server-ubuntu)
+5. [Struktur monorepo](#5-struktur-monorepo)
+6. [Skema database](#6-skema-database)
+7. [API reference](#7-api-reference)
+8. [Fitur per modul](#8-fitur-per-modul)
+9. [Sumber data](#9-sumber-data)
+10. [Perintah](#10-perintah)
+11. [Konfigurasi](#11-konfigurasi)
+12. [Catatan operasional](#12-catatan-operasional)
+13. [Smoke test](#13-smoke-test)
 
 ---
 
@@ -132,7 +133,7 @@ kesehatan tampil di sidebar & halaman Pengaturan sebagai **LLM Gateway**.
 
 ```bash
 bun run build
-WEB_DIST=apps/web/dist bun run start --cwd apps/api
+WEB_DIST=../web/dist bun run --cwd apps/api start
 # dashboard + API + /docs disajikan dari http://localhost:3001
 ```
 
@@ -172,7 +173,390 @@ Untuk worker dengan AI stack di Docker:
 
 ---
 
-## 4. Struktur monorepo
+## 4. Setup server Ubuntu
+
+Panduan ini untuk Ubuntu 22.04 / 24.04 LTS (VPS 2 vCPU / 4 GB RAM sudah cukup untuk
+mode worker ringan). Semua perintah dijalankan sebagai user non-root dengan `sudo`.
+
+### 4.1 Topologi yang direkomendasikan
+
+```text
+Internet :443
+   │
+ Nginx (TLS certbot) ──► 127.0.0.1:3001  Bun API + dashboard statis (WEB_DIST)
+                              │
+                              ├─► 127.0.0.1:5432  PostgreSQL 16 + pgvector (Docker)
+                              └─► 127.0.0.1:6379  Redis 7 (Docker)
+
+systemd: ima-api · ima-worker · ima-poll · ima-cluster · ima-social (opsional)
+```
+
+PostgreSQL, Redis, dan port API **tidak** dibuka ke publik — hanya Nginx (80/443).
+
+### 4.2 Paket sistem
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl git unzip build-essential python3 python3-venv python3-dev \
+  libxml2-dev libxslt1-dev nginx ufw
+
+# Docker Engine + plugin compose
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker "$USER"   # logout/login agar berlaku
+```
+
+Ubuntu 24.04 sudah memakai Python 3.12. Untuk 22.04 (Python 3.10) pasang 3.12 dari
+[deadsnakes](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa), lalu gunakan
+`python3.12 -m venv` pada langkah 4.5.
+
+### 4.3 Bun
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+sudo install -m 755 "$HOME/.bun/bin/bun" /usr/local/bin/bun
+bun --version   # ≥ 1.2
+```
+
+### 4.4 User layanan & kode
+
+```bash
+sudo adduser --disabled-password --gecos "" ima
+sudo mkdir -p /opt/ima-isa && sudo chown ima:ima /opt/ima-isa
+sudo usermod -aG docker ima      # agar user layanan bisa memakai docker CLI
+sudo -iu ima
+
+cd /opt/ima-isa
+git clone <URL-REPO> .          # atau rsync/scp dari mesin lokal
+bun install --frozen-lockfile
+```
+
+### 4.5 Konfigurasi `.env` produksi
+
+```bash
+cp .env.example .env && chmod 600 .env
+nano .env
+```
+
+Nilai minimum yang **wajib** diubah (LLM opsional — tanpa itu briefing memakai
+fallback ekstraktif):
+
+```env
+POSTGRES_PASSWORD=<password-panjang-acak>
+POSTGRES_PORT=127.0.0.1:5432        # jangan 5432 saja → Docker membuka ke publik
+REDIS_PORT=127.0.0.1:6379
+DATABASE_URL=postgres://postgres:<password-panjang-acak>@127.0.0.1:5432/media_intel
+REDIS_URL=redis://127.0.0.1:6379
+CORS_ORIGIN=https://intel.example.id
+API_KEY=<random-32-karakter>
+VITE_API_KEY=<sama-dengan-API_KEY>
+LLM_URL=https://api.commandcode.ai/provider/v1/chat/completions
+LLM_API_KEY=sk-...
+LLM_MODEL=nama-model-yang-valid
+```
+
+Catatan:
+
+- Karakter khusus pada password harus di-URL-encode di `DATABASE_URL` (mis. `@` → `%40`).
+- Bun tidak membaca `.env` di root repo saat proses dijalankan dari `apps/api`
+  (`bun run dev`, drizzle CLI). Buat symlink sekali: `ln -sfn ../../.env apps/api/.env`.
+  Di systemd tidak perlu — variabel di-inject lewat `EnvironmentFile`.
+- `VITE_API_KEY` di-*bake* saat build dashboard. Bila `API_KEY` diisi, build ulang
+  setiap kali key berubah (lihat 4.7).
+
+### 4.6 Infrastruktur database & Redis
+
+```bash
+docker compose up -d postgres redis
+docker compose ps
+
+# pastikan hanya listening di loopback
+ss -lntp | grep -E '5432|6379'
+```
+
+Memakai PostgreSQL/Redis yang sudah terpasang di host (tanpa Docker)? Jangan jalankan
+compose untuk keduanya — port 5432/6379 akan bentrok. Cukup arahkan `DATABASE_URL` dan
+`REDIS_URL` ke instance host, dan pastikan ekstensi tersedia:
+
+```bash
+# Ubuntu (versi mengikuti cluster): postgresql-16-pgvector
+sudo apt install -y postgresql-16-pgvector
+
+# macOS (Homebrew)
+brew install pgvector
+psql -d media_intel -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm;'
+```
+
+Catatan: `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` hanya dibaca image
+PostgreSQL **saat volume pertama kali dibuat**. Mengubahnya setelah cluster ada tidak
+mengubah role/password yang sudah ada; untuk instance host, variabel yang berlaku hanya
+`DATABASE_URL`.
+
+### 4.7 Skema, build, dan uji API
+
+```bash
+# Migrasi (file SQL sudah ada di apps/api/drizzle)
+bun run db:migrate
+bun run db:seed
+
+# Build dashboard (wajib bila API_KEY diisi, agar VITE_API_KEY ikut ter-bake)
+VITE_API_KEY=<nilai-sama> bun run build
+
+# Uji manual sebelum systemd (dari root repo /opt/ima-isa)
+NODE_ENV=production WEB_DIST=../web/dist bun run --cwd apps/api start
+curl -s localhost:3001/health
+```
+
+Hentikan dengan `Ctrl+C` setelah health check mengembalikan status `ok`.
+
+### 4.8 systemd: API
+
+```ini
+# /etc/systemd/system/ima-api.service
+[Unit]
+Description=IMA-ISA API & dashboard (Bun)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ima
+Group=ima
+WorkingDirectory=/opt/ima-isa/apps/api
+EnvironmentFile=/opt/ima-isa/.env
+Environment=NODE_ENV=production
+Environment=WEB_DIST=/opt/ima-isa/apps/web/dist
+Environment=TZ=Asia/Jakarta
+ExecStart=/usr/local/bin/bun src/index.ts
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 4.9 systemd: worker Python
+
+Sekali saja, siapkan venv sebagai user `ima`:
+
+```bash
+sudo -iu ima /bin/bash -lc 'cd /opt/ima-isa && bun run worker:setup'
+```
+
+Unit worker memakai pola yang sama; cukup beda `Description` dan `ExecStart`:
+
+```ini
+# /etc/systemd/system/ima-worker.service
+[Unit]
+Description=IMA-ISA AI enrichment worker
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ima
+Group=ima
+WorkingDirectory=/opt/ima-isa/services/worker-ai
+EnvironmentFile=/opt/ima-isa/.env
+Environment=TZ=Asia/Jakarta
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/ima-isa/services/worker-ai/.venv/bin/python -m main
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+| Service | `ExecStart` (python) | Fungsi |
+| --- | --- | --- |
+| `ima-worker` | `-m main` | AI enrichment daemon (wajib) |
+| `ima-poll` | `-m scrapers.rss_poller` | RSS poller 10 portal (wajib) |
+| `ima-cluster` | `-m cluster_worker` | Klasterisasi + briefing |
+| `ima-social` | `-m scrapers.social_poller` | X / YouTube (opsional, perlu token) |
+
+Aktifkan semuanya:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ima-api ima-worker ima-poll ima-cluster
+sudo systemctl status ima-api ima-worker --no-pager
+```
+
+### 4.10 Nginx reverse proxy
+
+Dua varian config sudah tersedia di repo — pilih sesuai kebutuhan:
+
+| File di repo | Dipasang ke | Untuk |
+| --- | --- | --- |
+| `deploy/nginx/ima-isa.conf` | `/etc/nginx/sites-available/ima-isa` | **produksi**: redirect 80→443, TLS 1.2/1.3, rate limit, SSE, aset immutable, SPA, gzip |
+| `deploy/nginx/ima-isa-headers.conf` | `/etc/nginx/snippets/ima-isa-headers.conf` | header keamanan untuk varian produksi (HSTS, nosniff, CSP opsional) |
+| `deploy/nginx/ima-isa-http.conf` | `/etc/nginx/sites-available/ima-isa-http` | **lokal/HTTP**: tanpa TLS & certbot, tanpa HSTS |
+
+#### 4.10.1 Varian produksi (HTTPS)
+
+Ganti domain contoh (`server_name` + 2 path sertifikat) di file repo:
+
+```bash
+sed -i 's/intel\.example\.id/domain-anda.id/g' deploy/nginx/ima-isa.conf
+```
+
+Terbitkan sertifikat dulu (nginx belum jalan, port 80 bebas). Hook disimpan certbot
+sehingga renewal otomatis menghentikan/menyalakan nginx:
+
+```bash
+sudo apt install -y certbot
+sudo certbot certonly --standalone \
+  --pre-hook "systemctl stop nginx" --post-hook "systemctl start nginx" \
+  -d domain-anda.id -m admin@example.id --agree-tos --no-eff-email
+```
+
+Pasang config, lalu uji:
+
+```bash
+sudo mkdir -p /var/www/certbot
+sudo cp deploy/nginx/ima-isa.conf         /etc/nginx/sites-available/ima-isa
+sudo cp deploy/nginx/ima-isa-headers.conf /etc/nginx/snippets/ima-isa-headers.conf
+sudo ln -sfn /etc/nginx/sites-available/ima-isa /etc/nginx/sites-enabled/ima-isa
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot renew --dry-run
+```
+
+Poin penting yang sudah diatur di dalamnya:
+
+- **SSE** `/api/feeds/stream`: `proxy_buffering off`, `proxy_read_timeout 24h`,
+  `gzip off`, dan `Connection ''` — tanpa ini live feed tersendat/di-buffer.
+- **API** `/api/`: `proxy_read_timeout 180s` agar executive briefing (LLM) tidak
+  timeout, plus rate limit 30 r/s per IP (burst 40) dan blokir `/api/dev/` di edge.
+- **Aset** `/assets/`: `Cache-Control: immutable` 1 tahun (nama file ber-hash);
+  `index.html` justru `no-cache` agar deploy baru langsung terpakai.
+- **Headers**: HSTS, `nosniff`, `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`. CSP disediakan sebagai komentar karena MapLibre GL memakai
+  worker/blob dan Swagger UI memuat aset dari unpkg — uji di staging sebelum aktif.
+- **HTTP/2** memakai sintaks `listen 443 ssl http2;` yang valid di nginx 1.18
+  (Ubuntu 22.04) maupun 1.24 (24.04).
+
+#### 4.10.2 Varian lokal (HTTP, tanpa TLS)
+
+Untuk mencoba build produksi tanpa domain/sertifikat — akses lewat
+**`http://localhost:2323`**. Port 2323 dipakai (bukan 80) karena tidak butuh root dan
+di luar rentang port sementara kernel, jadi tidak bentrok dengan proses lain.
+
+```bash
+# 1. API + dashboard dari satu origin (terminal 1)
+bun run build
+NODE_ENV=production WEB_DIST=../web/dist bun run --cwd apps/api start   # :3001
+
+# 2. Pasang config HTTP (terminal 2)
+sudo cp deploy/nginx/ima-isa-http.conf /etc/nginx/sites-available/ima-isa-http
+sudo ln -sfn /etc/nginx/sites-available/ima-isa-http /etc/nginx/sites-enabled/ima-isa-http
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Buka <http://localhost:2323>. Ingin port lain? Ubah kedua baris `listen` (IPv4 dan
+IPv6) di file config, mis. ke 8080:
+
+```bash
+sudo sed -i 's/listen 2323 default_server;/listen 8080 default_server;/' /etc/nginx/sites-available/ima-isa-http
+sudo sed -i 's/listen \[::\]:2323 default_server;/listen [::]:8080 default_server;/' /etc/nginx/sites-available/ima-isa-http
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Bila nginx berjalan di server (bukan lokal) dan `ufw` aktif, buka port-nya:
+`sudo ufw allow 2323/tcp`.
+
+Perbedaan dengan varian produksi:
+
+- Tanpa blok TLS/certbot dan **tanpa HSTS** (header itu tidak berlaku di HTTP).
+- Tanpa rate limit per IP — lebih nyaman saat testing.
+- `/api/dev/` sengaja tidak diblokir, jadi `POST /api/dev/seed` tetap bisa dipakai
+  mengisi data demo selama API berjalan mode dev. Di produksi API sendiri menolak
+  endpoint tersebut dengan `403` saat `NODE_ENV=production`.
+- Jangan pakai config ini untuk domain publik: API key dan data dashboard lewat
+  jaringan tanpa enkripsi.
+
+Varian ini sudah diuji end-to-end pada port 2323: `/health` → `200`, dashboard
+`text/html`, SPA fallback `200`, aset `immutable`, dan SSE `text/event-stream`.
+
+### 4.11 Firewall
+
+```bash
+sudo ufw default deny incoming
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+sudo ufw status verbose
+```
+
+Port `3001`, `5432`, dan `6379` **tidak** dibuka — semuanya lewat loopback.
+Bun mendengarkan di `0.0.0.0:3001`, jadi jangan matikan `ufw`; bila perlu lapisan
+tambahan, batasi akses ke port tersebut lewat aturan `ufw deny 3001`.
+
+### 4.12 Update & backup
+
+```bash
+# Update kode
+sudo -iu ima /bin/bash -lc '
+  cd /opt/ima-isa
+  git pull
+  bun install --frozen-lockfile
+  bun run db:migrate
+  VITE_API_KEY=<kunci-yang-sama> bun run build
+'
+sudo systemctl restart ima-api ima-worker ima-poll ima-cluster
+
+# Backup harian (cron user ima)
+mkdir -p ~/backups
+docker exec media-intel-postgres pg_dump -U postgres media_intel \
+  | gzip > "$HOME/backups/ima-isa-$(date +%F).sql.gz"
+```
+
+### 4.13 Verifikasi produksi
+
+```bash
+curl -s localhost:3001/health
+curl -sI https://intel.example.id | head -1
+sudo systemctl is-active ima-api ima-worker ima-poll ima-cluster
+sudo journalctl -u ima-api -n 30 --no-pager
+curl -N "https://intel.example.id/api/feeds/stream?topics=media"   # SSE tidak boleh ter-buffer
+```
+
+### 4.14 Alternatif: Docker penuh
+
+```bash
+docker compose --profile full up -d --build
+```
+
+Container `worker-ai` hanya menjalankan `python -m main`. Untuk poller & klaster,
+tambahkan service turunan di `docker-compose.yml` (profil `full`) dengan
+`command` berbeda, mis.:
+
+```yaml
+  poller:
+    profiles: ["full"]
+    build: { context: ./services/worker-ai }
+    command: ["python", "-m", "scrapers.rss_poller"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_intel}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+```
+
+Jalankan ulang `docker compose --profile full up -d --build` setelah menambah service.
+Untuk produksi jangka panjang, systemd (4.8–4.9) lebih mudah di-*restart* per proses
+dan log-nya menyatu di `journalctl`.
+
+---
+
+## 5. Struktur monorepo
 
 ```text
 IMA-ISA/
@@ -193,6 +577,12 @@ IMA-ISA/
 │                               # CrisisAlerts, Settings
 ├── packages/types/             # kontrak DTO bersama (TypeScript)
 ├── services/worker-ai/         # Python: scrapers, nlp, cluster worker
+│   ├── scrapers/               # rss_poller, social_poller, extractor, body_cleaner,
+│   │                           # google_news, trends/{google,google_trending,tiktok,x}
+│   ├── trends_poller.py        # trending X · TikTok · Google Trends
+│   ├── clean_bodies.py         # perapian badan artikel lama di DB
+│   └── nlp/                    # normalizer, sentiment, ner, embedder, summarizer
+├── deploy/nginx/               # config Nginx siap pakai (site + headers)
 ├── docker/init/                # ekstensi pgvector & pg_trgm
 ├── scripts/py                  # launcher Python → venv worker
 ├── docker-compose.yml
@@ -201,7 +591,7 @@ IMA-ISA/
 
 ---
 
-## 5. Skema database
+## 6. Skema database
 
 | Tabel | Fungsi | Kolom kunci |
 | --- | --- | --- |
@@ -210,15 +600,19 @@ IMA-ISA/
 | `topic_clusters` | klaster isu | `centroid vector(768)`, `total_articles`, `summary` |
 | `cluster_items` | relasi klaster ↔ artikel | unik `(cluster_id, media_item_id)` |
 | `monitored_keywords` | Boolean watchlist | `boolean_query`, `is_active` |
-| `social_trends` | X Trends hasil poller sosial | `woeid`, `name`, `tweet_volume`, `captured_at` |
+| `social_trends` | snapshot tren X/TikTok/Google | `platform`, `name`, `rank`, `tweet_volume` + `volume_label`, `trend_type`, `window_hours`, `source_published_at`, `related_queries` (jsonb), `news_count`, `raw` (jsonb), `captured_at` |
 | `alerts` | peringatan lonjakan | `severity`, `metrics_snapshot` (jsonb), `is_resolved` |
 
 Indeks: HNSW cosine pada `media_items.embedding`, B-tree pada `published_at`,
-`sentiment`, `source_id`, `platform`, serta `alerts(triggered_at, severity, is_resolved)`.
+`sentiment`, `source_id`, `platform`, `social_trends(platform, window_hours, captured_at)`,
+serta `alerts(triggered_at, severity, is_resolved)`.
+
+Migrasi `0002`–`0007` menambahkan enum `GOOGLE_TRENDS`, kolom tren baru, dan
+membersihkan snapshot lama (RSS 10 item + duplikat akumulatif).
 
 ---
 
-## 6. API reference
+## 7. API reference
 
 Semua endpoint berada di bawah `/api`.
 
@@ -234,7 +628,7 @@ Semua endpoint berada di bawah `/api`.
 | GET | `/clusters/:id` | Detail klaster + artikel anggota |
 | POST | `/clusters/:id/summarize` | Executive briefing (LLM gateway, fallback ekstraktif) |
 | POST | `/clusters/rebuild` | Klasterisasi inkremental (admin) |
-| GET | `/trending/social` | Trending sosial: X Trends + hashtag (`window=24h\|7d`) |
+| GET | `/trending/social` | Trending gabungan: X · TikTok · Google Trends + hashtag (`window=24h\|7d`, `platform=TWITTER_X\|TIKTOK\|GOOGLE_TRENDS`, `sort=volume\|rank`, `hours=4\|24\|48\|168`) |
 | GET | `/trending/figures` | Tokoh paling disebut (`period=daily\|weekly\|monthly\|yearly`) |
 | GET | `/alerts` | Daftar peringatan (`severity`, `resolved`) |
 | POST | `/alerts/scan` | Pindai lonjakan manual (admin) |
@@ -252,7 +646,7 @@ Klien dashboard membaca `VITE_API_KEY` secara otomatis.
 
 ---
 
-## 7. Fitur per modul
+## 8. Fitur per modul
 
 ### Modul 1 — Ingestion & normalisasi
 
@@ -309,23 +703,38 @@ Klien dashboard membaca `VITE_API_KEY` secara otomatis.
 
 ### Modul 6 — Trending sosial & peringkat tokoh
 
-- **6.1 Trending sosial.** `GET /api/trending/social?window=24h|7d` menggabungkan
-  X Trends (tabel `social_trends`, diisi bila `X_BEARER_TOKEN` ada) dengan hashtag
-  yang diekstrak dari post sosial (`entities.hashtags`). Setiap item memuat volume,
-  delta vs periode sebelumnya, rasio negatif, platform, dan tautan pencarian.
+- **6.1 Trending multi-platform.** `GET /api/trending/social` menggabungkan tiga
+  sumber tren (`social_trends`) dengan hashtag turunan post sosial
+  (`entities.hashtags`):
+  - **X** — API v2 resmi, cookie login (`X_AUTH_TOKEN`+`X_CT0`), atau guest token
+    publik (`X_TRENDS_MODE=auto|api|login|guest`);
+  - **TikTok** — Creative Center bila `TIKTOK_SESSION_COOKIE` diisi, jika tidak
+    Discover feed publik (hashtag + sound);
+  - **Google Trends** — scrape halaman `/trending` (140 tren/24 jam: volume,
+    waktu mulai, related queries, jumlah berita) dengan fallback otomatis ke RSS.
+
+  Parameter: `window=24h|7d` (hashtag), `platform`, `sort=volume|rank`
+  (default **volume**, karena feed Google sendiri urut kebaruan), dan `hours`
+  untuk jendela Google. Respons memuat `sources`, `breakdown`, dan `windows`
+  (jendela Google yang benar-benar tersedia). Setiap item membawa `volume`,
+  `volumeLabel`, `relatedQueries`, `newsCount`, `publishedAt`, dan `dataSource`
+  (`trending_page` / `rss`) agar kualitas data terlihat di UI.
 - **6.2 Peringkat tokoh.** `GET /api/trending/figures?period=daily|weekly|monthly|yearly`
   menghitung sebutan entitas `persons` pada jendela harian (1 hari), mingguan (7),
   bulanan (30), atau tahunan (365), beserta pembanding periode sebelumnya, rasio
   negatif, sumber, dan contoh headline. Varian nama (`Prabowo` vs `Prabowo Subianto`)
   digabung otomatis.
-- Keduanya tampil di halaman **Trending & Tokoh** dengan tab Sosial Media / Tokoh dan
-  filter periode. Data ikut ter-refresh via SSE saat artikel baru masuk.
+- Keduanya tampil di halaman **Trending & Tokoh**: tab Sosial Media (sub-tab
+  Semua / X / TikTok / Google, tombol urut *Volume* atau *Peringkat feed*, serta
+  pemilih jendela 4 jam / 24 jam / 7 hari yang hanya muncul bila datanya tersedia)
+  dan tab Tokoh dengan filter periode. Data ikut ter-refresh via SSE saat artikel
+  baru masuk.
 
 ---
 
-## 8. Sumber data
+## 9. Sumber data
 
-### 8.1 Media (10 portal)
+### 9.1 Media (10 portal)
 
 | # | Portal | Karakteristik | Metode ingestion |
 | --- | --- | --- | --- |
@@ -344,7 +753,7 @@ Klien dashboard membaca `VITE_API_KEY` secara otomatis.
 portal yang memblokir bot (403 Cloudflare) tetap ter-ingest lewat Google News
 site-scoped. Skema domain tetap memakai domain asli untuk atribusi & deduplikasi.
 
-### 8.2 Media sosial (opsional)
+### 9.2 Media sosial (opsional)
 
 `services/worker-ai/scrapers/social_poller.py` memakai kontrak payload yang sama dengan
 RSS (`media:raw`), jadi AI worker dan dashboard tidak perlu diubah.
@@ -353,7 +762,83 @@ RSS (`media:raw`), jadi AI worker dan dashboard tidak perlu diubah.
 | --- | --- | --- | --- |
 | X / Twitter | API v2 `search/recent` | `X_BEARER_TOKEN` | perlu akses API berbayar; query diatur `X_QUERY` |
 | YouTube | RSS channel publik | `YOUTUBE_CHANNEL_IDS` | tanpa API key; hanya video terbaru, bukan komentar |
-| TikTok / Instagram | belum diimplementasikan | — | butuh API resmi/penyedia pihak ketiga |
+| TikTok / Instagram | belum diimplementasikan (ingest) | — | butuh API resmi/penyedia pihak ketiga |
+
+### 9.3 Trending (X · TikTok · Google Trends)
+
+`services/worker-ai/trends_poller.py` mengambil **tren**, bukan konten, lalu menulis
+snapshot ke `social_trends`. Tiap platform punya jalur tanpa kredensial dan jalur
+kredensial:
+
+| Platform | Tanpa kredensial | Dengan kredensial | Variabel |
+| --- | --- | --- | --- |
+| Google Trends | ✅ halaman `/trending?geo=ID&hours=24` (140 tren) — fallback RSS 10 tren | — | `GOOGLE_TRENDS_GEO`, `GOOGLE_TRENDS_WINDOWS`, `GOOGLE_TRENDS_SOURCE` |
+| TikTok | ✅ Discover feed (`/node/share/discover`): hashtag + sound | Creative Center (volume & periode resmi) | `TIKTOK_SESSION_COOKIE`, `TIKTOK_TRENDS_PERIOD` |
+| X / Twitter | ⚠️ guest token publik: nama tren + peringkat, **tanpa volume** | API v2 (`/2/trends/by/woeid`) atau cookie login | `X_BEARER_TOKEN`, atau `X_AUTH_TOKEN` + `X_CT0` |
+
+```bash
+bun run worker:trends:probe                 # cek kredensial & isi tiap platform
+bun run worker:trends -- --once             # ambil X + TikTok + Google sekali
+bun run worker:trends -- --once --platform google
+```
+
+Catatan operasional:
+
+- **Cara ambil cookie** (bukan login programatik): buka `x.com` / TikTok Ads di
+  browser → DevTools → Application → Cookies → salin `auth_token` & `ct0` (X) atau
+  `sessionid` (TikTok) ke `.env`. Token ini setara sesi login — perlakukan sebagai
+  rahasia dan rotasi bila bocor.
+- **Guest token X** memakai bearer publik klien web, bukan token developer; cukup untuk
+  daftar tren, tapi bisa berubah sewaktu-waktu dan tidak memberi `tweet_volume`.
+  Pakai API resmi bila butuh volume dan stabilitas.
+- Snapshot dibatasi `TRENDS_CAPTURE_INTERVAL_SECONDS` (default 15 menit) per platform,
+  retensi 14 hari, dan `--force` untuk memaksa snapshot baru.
+- `rank`, label volume asli (`200+`, `157,4 jt tayangan`), sumber berita (Google), serta
+  gambar sampul (TikTok/Google) ikut disimpan agar UI bisa menampilkan konteks.
+- **Umur tren vs umur snapshot**: kolom `source_published_at` menyimpan waktu tren
+  menurut platform (RSS `pubDate` Google, `as_of` X). Filter jendela dan label
+  "… lalu" memakai kolom ini; `captured_at` hanya menandai kapan worker mengambil
+  snapshot. TikTok tidak menyediakan waktu per tren, jadi memakai `captured_at`.
+- **Satu snapshot per platform**: `/api/trending/social` hanya membaca snapshot
+  terbaru tiap platform (`DISTINCT ON (platform) … max(captured_at)`), karena daftar
+  tren bersifat menggantikan — bukan akumulatif. Tanpa ini peringkat dari snapshot
+  lama bertabrakan dengan yang baru.
+- **Sumber Google = halaman `/trending`, bukan RSS.** RSS resmi hanya memuat
+  **10 tren tanpa parameter jendela**, sementara halaman `trends.google.com/trending`
+  menyimpan 140 tren (24 jam) di blok `AF_initDataCallback` — lengkap dengan volume
+  (`50.000`), waktu mulai, related queries, dan jumlah berita. `scrapers/trends/
+  google_trending.py` mem-parse blok itu dengan tiga lapis pengaman:
+  (1) `_looks_like_rows()` mendeteksi bentuk baris tanpa bergantung indeks tetap,
+  (2) minimal 50% baris harus valid (kalau tidak → dianggap schema drift),
+  (3) `capture_google()` jatuh ke RSS (`raw.source = "rss"`) dan UI menandai `RSS`
+  pada item tersebut.
+- **Jendela waktu**: `GOOGLE_TRENDS_WINDOWS=24` (default). Bisa `4,24,168` — tiap
+  jendela = 1 request ±1,3 MB, jadi tambah jendela berarti tambah bandwidth. UI hanya
+  menampilkan tab jendela yang datanya tersedia (`windows` di respons API).
+- **Kadens & bandwidth (terukur)**: halaman Google 1,28 MB bila tanpa kompresi,
+  tetapi server mengirim **gzip → hanya ±154 KB per request** (curl `--compressed`:
+  149–158 KB). Dengan `TRENDS_INTERVAL_GOOGLE=300` itu ≈ **42 MB/hari**.
+  `ETag`/`Last-Modified` tidak dikirim dan `Range` tidak dihormati (diuji: selalu
+  200 tanpa `Content-Range`), jadi satu-satunya pengungkit nyata adalah frekuensi.
+- **Adaptif (default `TRENDS_ADAPTIVE=true`)**: dashboard menandai
+  `trends:interest:<platform>` (TTL 15 menit) di Redis setiap `/api/trending/social`
+  dipanggil. Worker hanya scrape bila penanda itu ada; kalau sepi, cukup sekali sejam
+  (`TRENDS_IDLE_INTERVAL_SECONDS=3600`) → ±3,7 MB/hari saat idle, ±42 MB/hari saat
+  ada yang menonton. Siaran feed Google sendiri berganti tiap ±45–90 detik, jadi
+  selisih kecil terhadap situs Google adalah konsekuensi frekuensi, bukan bug.
+- **Snapshot bersifat menggantikan** (`replace`), bukan append: tabel hanya menyimpan
+  daftar terbaru per (platform, jendela). Penggantian dibatalkan bila hasil baru
+  < 50% snapshot sebelumnya, supaya scrape cacat tidak menghapus data bagus —
+  kecuali pada fallback RSS yang memang lebih kecil dan sengaja menggantikan. Tidak ada parameter resmi untuk memilih jendela 24 jam/7 hari;
+  pemilih 24 jam/7 hari hanya memfilter berdasarkan umur tren. Google juga
+  menonaktifkan parameter `hl` untuk feed ini (selalu bahasa Inggris).
+- **Urutan default = volume, bukan peringkat feed**: feed Google mengurutkan tren
+  berdasarkan kebaruan, sehingga item ber-volume `200+` bisa berada di atas `2000+`.
+  `social_trends.tweet_volume` menyimpan `approx_traffic` sebagai angka
+  (`"2000+" → 2000`), dan `/api/trending/social` mengurutkan menurun dengan
+  `sort=volume` (default). Pakai `?sort=rank` untuk urutan asli platform.
+  Item yang platformnya tidak memberi volume (X via guest token) tetap urut peringkat
+  dan tidak bercampur dengan blok tipe lain.
 
 ```env
 X_BEARER_TOKEN=...
@@ -371,12 +856,13 @@ bun run worker:social
 Data sosial masuk dengan `platform = TWITTER_X` / `YOUTUBE`, lalu diproses dengan
 normalisasi slang, sentimen, NER, dan embedding yang sama. Batasan: teks pendek
 membuat NER lebih jarang, dan X umumnya membatasi jumlah request per tier.
-X Trends disimpan di `social_trends` lalu digabung dengan hashtag turunan post sosial
-oleh Modul 6.
+Tren dari X, TikTok, dan Google Trends disimpan di `social_trends` (`trend_type` =
+`trend` / `hashtag` / `search` / `sound`) lalu digabung dengan hashtag turunan post
+sosial oleh Modul 6 di `/api/trending/social` (filter `?platform=`).
 
 ---
 
-## 9. Perintah
+## 10. Perintah
 
 | Perintah | Fungsi |
 | --- | --- |
@@ -390,7 +876,11 @@ oleh Modul 6.
 | `bun run worker` | AI enrichment daemon |
 | `bun run worker:poll` | RSS poller |
 | `bun run worker:social` | poller X/YouTube |
+| `bun run worker:trends` | poller trending X/TikTok/Google |
+| `bun run worker:trends:probe` | cek kredensial + isi tiap platform trending |
 | `bun run worker:cluster` | cron klasterisasi |
+| `bun run worker:clean` | audit + rapikan detail berita di DB (dry-run) |
+| `bun run worker:clean:apply` | tulis hasil perapian + hitung ulang sentimen/entitas/embedding |
 | `bun run dev:worker` | semua worker sekaligus |
 | `bun run dev:all` | API + web + semua worker |
 | `bun run infra:up` / `infra:down` / `infra:logs` | Docker Compose |
@@ -399,7 +889,7 @@ oleh Modul 6.
 
 ---
 
-## 10. Konfigurasi
+## 11. Konfigurasi
 
 | Variabel | Default | Fungsi |
 | --- | --- | --- |
@@ -420,6 +910,17 @@ oleh Modul 6.
 | `ALERT_WEBHOOK_URL` | kosong | webhook Slack/Teams |
 | `X_TRENDS_WOEID` | `23424846` | WOEID wilayah untuk X Trends (Indonesia) |
 | `X_TRENDS_REGION` | `Indonesia` | label wilayah pada tabel `social_trends` |
+| `X_TRENDS_MODE` | `auto` | `auto` (API→login→guest) \| `api` \| `login` \| `guest` |
+| `X_AUTH_TOKEN` / `X_CT0` | kosong | cookie login x.com untuk tren berbobot volume |
+| `GOOGLE_TRENDS_GEO` / `GOOGLE_TRENDS_REGION` | `ID` / `Indonesia` | wilayah Google Trends |
+| `GOOGLE_TRENDS_SOURCE` | `page` | `page` (scrape `/trending`, 140 tren) \| `rss` (10 tren) |
+| `GOOGLE_TRENDS_WINDOWS` | `24` | jendela scrape, mis. `4,24,168` (tiap jendela ±154 KB gzip) |
+| `TRENDS_ADAPTIVE` | `true` | scrape hanya saat dashboard dibuka (penanda Redis) |
+| `TRENDS_IDLE_INTERVAL_SECONDS` | `3600` | saat sepi, tetap segarkan tiap N detik |
+| `TRENDS_INTERVAL_GOOGLE` / `_TIKTOK` / `_X` | `300` / `300` / `600` | jeda snapshot per platform |
+| `TIKTOK_SESSION_COOKIE` | kosong | cookie Creative Center (volume tayangan) |
+| `TRENDS_GOOGLE_LIMIT` | `200` | maksimum tren Google yang disimpan |
+| `EXTRACT_FULLTEXT` / `FULLTEXT_LIMIT_PER_FEED` | `true` / `5` | pengambilan badan artikel saat ingest |
 | `CLUSTER_WINDOW_HOURS` | `24` | jendela waktu kandidat klaster |
 | `CLUSTER_DISTANCE_THRESHOLD` | `0` (auto) | cosine distance maksimum — 0.25 IndoBERT, 0.62 leksikal |
 | `CLUSTER_MIN_ITEMS` | `5` | minimum artikel per klaster |
@@ -427,7 +928,7 @@ oleh Modul 6.
 
 ---
 
-## 11. Catatan operasional
+## 12. Catatan operasional
 
 - **Worker restart-safe**: pesan gagal dipindah ke `media:dead` lalu di-`XACK`, sehingga
   antrean tidak pernah macet.
@@ -436,10 +937,29 @@ oleh Modul 6.
 - **Seed idempoten**: eksternal ID demo bersifat deterministik; aman diulang.
 - **Rentang waktu** dibatasi maksimum 90 hari per query untuk menjaga latensi agregasi.
 - **Zona waktu**: bucket tren dan heatmap dihitung pada WIB (UTC+7).
+- **Ganti kredensial DB tidak otomatis berlaku.** `POSTGRES_*` hanya dipakai saat volume
+  Docker dibuat; role/password yang sudah ada tidak berubah. Untuk PostgreSQL host,
+  buat role-nya dulu (`CREATE ROLE ... LOGIN PASSWORD ...` + grant ke database), ubah
+  `DATABASE_URL`, lalu **restart proses API** — Bun memuat `.env` sekali saat start.
+- **Badan artikel bersih**: `scrapers/extractor.py` membuang blok `<script>`/`<style>`
+  **sebelum** tag lain di-strip, lalu menolak hasil ekstraksi yang masih berbau kode
+  (JS/CSS). Bila Trafilatura gagal, fallback memilih kontainer dengan teks `<p>`
+  terbanyak. Judul yang diulang, metadata redaksi (pola BBC/Detik), `ADVERTISEMENT`,
+  link "Baca juga", promo, dan nama situs di ekor dibuang oleh
+  `scrapers/body_cleaner.py` — dipakai saat ingest maupun saat perapian data lama.
+- **Perapian data lama**: `bun run worker:clean` (dry-run) lalu
+  `bun run worker:clean:apply`. Skrip `services/worker-ai/clean_bodies.py`
+  mengklasifikasi setiap baris (`ok`/`noisy`/`thin`/`junk`/`empty`), mengambil ulang
+  artikel yang bermasalah (URL mirror Google News didekode dulu lewat
+  `scrapers/google_news.py`), menormalkan teks, dan dengan `--refresh-nlp`
+  menghitung ulang sentimen/entitas/embedding. Berguna untuk audit:
+  `--state thin,junk --limit 100 --report out.json --rewrite-url`. Unduhan dibatasi
+  per domain (`--domain-interval`, `--per-domain`) dan domain yang membalas 202/403
+  (Cloudflare/challenge) dilewati serta dilaporkan sebagai `unresolved`.
 
 ---
 
-## 12. Smoke test
+## 13. Smoke test
 
 ```bash
 # health

@@ -77,9 +77,54 @@ class Settings:
     cluster_min_sources: int = int(os.getenv("CLUSTER_MIN_SOURCES", "2"))
 
     x_bearer_token: str | None = os.getenv("X_BEARER_TOKEN") or None
+    #: Cookie login akun X (auth_token + ct0) untuk jalur tanpa X API berbayar.
+    x_auth_token: str | None = os.getenv("X_AUTH_TOKEN") or None
+    x_ct0: str | None = os.getenv("X_CT0") or None
+    #: auto = API resmi → login → guest ; api/login/guest = paksa satu jalur.
+    x_trends_mode: str = (os.getenv("X_TRENDS_MODE") or "auto").strip().lower()
     x_query: str = os.getenv("X_QUERY", "(Indonesia OR nasional) -is:retweet lang:id")
     x_trends_woeid: int = int(os.getenv("X_TRENDS_WOEID", "23424846"))
     x_trends_region: str = os.getenv("X_TRENDS_REGION", "Indonesia")
+
+    # ── Trending: Google / TikTok / X ─────────────────────────
+    google_trends_geo: str = os.getenv("GOOGLE_TRENDS_GEO", "ID")
+    google_trends_region: str = os.getenv("GOOGLE_TRENDS_REGION", "Indonesia")
+    #: Jendela waktu yang diambil dari halaman trending (pisahkan koma).
+    #: 4/24/48/168 jam. Tiap jendela = 1 request ±1,3 MB.
+    google_trends_windows: tuple[int, ...] = tuple(
+        int(item)
+        for item in os.getenv("GOOGLE_TRENDS_WINDOWS", "24").replace(" ", "").split(",")
+        if item.strip().isdigit()
+    )
+    #: Halaman trending besar (±1,3 MB) sehingga timeout-nya lebih longgar.
+    google_trends_timeout_seconds: int = int(os.getenv("GOOGLE_TRENDS_TIMEOUT_SECONDS", "45"))
+    #: Hemat bandwidth: hanya ambil ulang bila dashboard sedang dibuka
+    #: (API menulis penanda `trends:interest:<platform>` di Redis).
+    trends_adaptive: bool = _bool("TRENDS_ADAPTIVE", True)
+    #: Saat tidak ada yang membuka dashboard, tetap segarkan tiap N detik.
+    trends_idle_interval_seconds: int = int(os.getenv("TRENDS_IDLE_INTERVAL_SECONDS", "3600"))
+    #: Sumber utama Google: `page` (scrape halaman) atau `rss`.
+    google_trends_source: str = (os.getenv("GOOGLE_TRENDS_SOURCE") or "page").strip().lower()
+    tiktok_trends_region: str = os.getenv("TIKTOK_TRENDS_REGION", "ID")
+    #: Cookie sesi TikTok Ads (sessionid/sid_tt) untuk Creative Center.
+    tiktok_session_cookie: str = (os.getenv("TIKTOK_SESSION_COOKIE") or "").strip()
+    tiktok_trends_period: int = int(os.getenv("TIKTOK_TRENDS_PERIOD", "7"))
+    #: Jeda minimum antar snapshot tren per platform (detik).
+    #: Google berganti tiap ±1 menit, X/TikTok lebih lambat, jadi dipisah.
+    trends_capture_interval_seconds: int = int(os.getenv("TRENDS_CAPTURE_INTERVAL_SECONDS", "120"))
+    trends_interval_google: int = int(
+        os.getenv("TRENDS_INTERVAL_GOOGLE") or os.getenv("TRENDS_CAPTURE_INTERVAL_SECONDS") or "60"
+    )
+    trends_interval_tiktok: int = int(
+        os.getenv("TRENDS_INTERVAL_TIKTOK") or os.getenv("TRENDS_CAPTURE_INTERVAL_SECONDS") or "300"
+    )
+    trends_interval_x: int = int(
+        os.getenv("TRENDS_INTERVAL_X") or os.getenv("TRENDS_CAPTURE_INTERVAL_SECONDS") or "600"
+    )
+    #: Jumlah tren yang diambil per platform setiap siklus.
+    trends_limit_per_platform: int = int(os.getenv("TRENDS_LIMIT_PER_PLATFORM", "20"))
+    #: Google (halaman trending) punya ratusan baris — simpan lebih banyak.
+    trends_google_limit: int = int(os.getenv("TRENDS_GOOGLE_LIMIT", "200"))
     youtube_channel_ids: tuple[str, ...] = tuple(
         item.strip()
         for item in os.getenv("YOUTUBE_CHANNEL_IDS", "").split(",")

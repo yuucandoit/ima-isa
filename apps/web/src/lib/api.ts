@@ -17,6 +17,7 @@ import type {
   SourceDTO,
   SocialTrendingResult,
   SourcePlatform,
+  TrendSort,
   SummaryResult,
   SystemStatus,
   TrendingWindow,
@@ -157,6 +158,9 @@ export function rebuildClusters(body?: {
 export function fetchSocialTrending(params: {
   window?: TrendingWindow
   limit?: number
+  platform?: 'TWITTER_X' | 'TIKTOK' | 'GOOGLE_TRENDS'
+  sort?: TrendSort
+  hours?: number
 }): Promise<SocialTrendingResult> {
   return unwrap<SocialTrendingResult>(client.api.trending.social.get({ query: params }))
 }

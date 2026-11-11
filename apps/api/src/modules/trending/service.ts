@@ -5,10 +5,13 @@ import type {
   FigureTrendingResult,
   SocialTrendItem,
   SocialTrendingResult,
+  SocialTrendingSourceCount,
+  TrendType,
   TrendingWindow,
 } from '@media-intel/types'
 import { db } from '../../db'
 import { iso } from '../../lib/serialize'
+import { type TrendSort, sortTrendItems } from './sort'
 
 type Row = Record<string, unknown>
 
@@ -28,9 +31,32 @@ function normaliseKey(value: string): string {
   return value.replace(/^#/, '').trim().toLowerCase()
 }
 
+const PLATFORM_LABEL: Record<string, string> = {
+  NEWS_MEDIA: 'Media Daring',
+  TWITTER_X: 'X / Twitter',
+  YOUTUBE: 'YouTube',
+  TIKTOK: 'TikTok',
+  GOOGLE_TRENDS: 'Google Trends',
+}
+
+/** Kolom `social_trends.trend_type` → tipe item DTO. */
+function trendTypeOf(row: Row): TrendType {
+  const stored = String(row.trend_type ?? 'trend')
+  if (stored === 'hashtag') return 'hashtag'
+  if (stored === 'search') return 'google_search'
+  if (stored === 'sound') return 'tiktok_sound'
+  return String(row.platform) === 'GOOGLE_TRENDS' ? 'google_search' : 'x_trend'
+}
+
 export interface SocialTrendingQuery {
   window?: TrendingWindow
   limit?: number
+  /** Filter satu platform, mis. GOOGLE_TRENDS. */
+  platform?: string
+  /** `volume` (default) atau `rank` (urutan asli feed platform). */
+  sort?: TrendSort
+  /** Jendela waktu Google Trends: 4 | 24 | 48 | 168 jam (default 24). */
+  hours?: number
 }
 
 /**
@@ -42,6 +68,7 @@ export async function getSocialTrending(
   query: SocialTrendingQuery = {},
 ): Promise<SocialTrendingResult> {
   const window: TrendingWindow = query.window ?? '24h'
+  const hours = [4, 24, 48, 168].includes(Number(query.hours)) ? Number(query.hours) : 24
   const limit = Math.min(50, Math.max(1, query.limit ?? 20))
   const now = new Date()
   const from = new Date(now.getTime() - SOCIAL_WINDOWS[window])
@@ -49,11 +76,26 @@ export async function getSocialTrending(
 
   const [trendRows, hashtagRows, previousRows] = await Promise.all([
     db.execute(sql`
-      SELECT DISTINCT ON (lower(name))
-        name, rank, tweet_volume, url, captured_at, platform
-      FROM social_trends
-      WHERE captured_at >= ${from.toISOString()}
-      ORDER BY lower(name), captured_at DESC
+      WITH latest AS (
+        -- Satu snapshot terbaru per (platform, jendela waktu): daftar tren
+        -- bersifat menggantikan, bukan akumulatif.
+        SELECT platform, window_hours, max(captured_at) AS captured_at
+        FROM social_trends
+        WHERE captured_at >= ${previousFrom.toISOString()}
+        GROUP BY platform, window_hours
+      )
+      SELECT t.platform, t.name, t.rank, t.tweet_volume, t.volume_label, t.trend_type,
+             t.source_name, t.image_url, t.url, t.captured_at, t.source_published_at,
+             t.region, t.window_hours, t.related_queries, t.news_count,
+             t.raw ->> 'source' AS data_source
+      FROM social_trends t
+      JOIN latest l
+        ON l.platform = t.platform
+       AND l.window_hours IS NOT DISTINCT FROM t.window_hours
+       AND l.captured_at = t.captured_at
+      WHERE t.captured_at >= ${from.toISOString()}
+        -- Google punya beberapa jendela; platform lain tidak berjendela.
+        AND (t.platform <> 'GOOGLE_TRENDS' OR t.window_hours = ${hours})
     `),
     db.execute(sql`
       SELECT
@@ -93,26 +135,67 @@ export async function getSocialTrending(
   }
 
   const items = new Map<string, SocialTrendItem>()
-  let xTrends = 0
-  let hashtags = 0
+  const counts = { xTrends: 0, googleTrends: 0, tiktokTrends: 0, hashtags: 0 }
+  const windows = new Map<number, { total: number; capturedAt: string | null }>()
+  const perPlatform = new Map<
+    string,
+    { total: number; rank: number | null; capturedAt: string | null; region: string | null }
+  >()
 
   for (const row of trendRows as Row[]) {
     const name = String(row.name)
-    const key = normaliseKey(name)
+    const platform = String(row.platform)
+    const key = `${platform}:${normaliseKey(name)}`
     const volume = Number(row.tweet_volume ?? 0)
+    const rank = row.rank === null || row.rank === undefined ? null : Number(row.rank)
+    const capturedAt = row.captured_at ? iso(row.captured_at as string) : null
+    // Waktu tren menurut platform; fallback ke waktu snapshot bila tidak ada.
+    const publishedAt = row.source_published_at
+      ? iso(row.source_published_at as string)
+      : capturedAt
+
     items.set(key, {
       name,
-      type: 'x_trend',
-      platform: String(row.platform) as SocialTrendItem['platform'],
-      rank: row.rank === null || row.rank === undefined ? null : Number(row.rank),
+      type: trendTypeOf(row),
+      platform: platform as SocialTrendItem['platform'],
+      rank,
       volume,
+      volumeLabel: (row.volume_label as string | null) ?? null,
       deltaPct: null,
       negativeRatio: 0,
       sourceCount: 0,
       url: (row.url as string | null) ?? null,
-      lastSeenAt: row.captured_at ? iso(row.captured_at as string) : null,
+      imageUrl: (row.image_url as string | null) ?? null,
+      sourceName: (row.source_name as string | null) ?? null,
+      publishedAt,
+      lastSeenAt: capturedAt,
+      windowHours: row.window_hours === null || row.window_hours === undefined ? null : Number(row.window_hours),
+      relatedQueries: ((row.related_queries as string[] | null) ?? []).slice(0, 8),
+      newsCount: row.news_count === null || row.news_count === undefined ? null : Number(row.news_count),
+      dataSource: (row.data_source as string | null) ?? null,
     })
-    xTrends += 1
+
+    // Hitung ikut sumber agregat: X trends, Google Trends, TikTok.
+    if (platform === 'TWITTER_X') counts.xTrends += 1
+    else if (platform === 'GOOGLE_TRENDS') counts.googleTrends += 1
+    else if (platform === 'TIKTOK') counts.tiktokTrends += 1
+
+    if (row.window_hours !== null && row.window_hours !== undefined) {
+      const hoursValue = Number(row.window_hours)
+      const windowBucket = windows.get(hoursValue) ?? { total: 0, capturedAt: null }
+      windowBucket.total += 1
+      if (capturedAt && (!windowBucket.capturedAt || capturedAt > windowBucket.capturedAt)) {
+        windowBucket.capturedAt = capturedAt
+      }
+      windows.set(hoursValue, windowBucket)
+    }
+
+    const bucket = perPlatform.get(platform) ?? { total: 0, rank: null, capturedAt: null, region: null }
+    bucket.region = (row.region as string | null) ?? bucket.region
+    bucket.total += 1
+    if (rank !== null && (bucket.rank === null || rank < bucket.rank)) bucket.rank = rank
+    if (capturedAt && (!bucket.capturedAt || capturedAt > bucket.capturedAt)) bucket.capturedAt = capturedAt
+    perPlatform.set(platform, bucket)
   }
 
   for (const row of hashtagRows as Row[]) {
@@ -145,23 +228,29 @@ export async function getSocialTrending(
         platform,
         rank: null,
         volume: mentions,
+        volumeLabel: `${mentions} sebutan`,
         deltaPct,
         negativeRatio,
         sourceCount: Number(row.source_count ?? 0),
         url: `https://x.com/search?q=${encodeURIComponent(`#${display.replace(/^#/, '')}`)}`,
+        imageUrl: null,
+        sourceName: null,
+        publishedAt: row.last_seen ? iso(row.last_seen as string) : null,
         lastSeenAt: row.last_seen ? iso(row.last_seen as string) : null,
+        windowHours: null,
+        relatedQueries: [],
+        newsCount: null,
+        dataSource: null,
       })
-      hashtags += 1
+      counts.hashtags += 1
     }
   }
 
-  const sorted = [...items.values()]
-    .sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'x_trend' ? -1 : 1
-      if (a.rank !== null && b.rank !== null) return a.rank - b.rank
-      return b.volume - a.volume
-    })
-    .slice(0, limit)
+  const filtered = query.platform
+    ? [...items.values()].filter((item) => item.platform === query.platform)
+    : [...items.values()]
+
+  const sorted = sortTrendItems(filtered, query.sort ?? 'volume').slice(0, limit)
 
   const capturedAt = (trendRows as Row[]).reduce<string | null>((latest, row) => {
     if (!row.captured_at) return latest
@@ -169,13 +258,33 @@ export async function getSocialTrending(
     return !latest || value > latest ? value : latest
   }, null)
 
+  const breakdown: SocialTrendingSourceCount[] = [...perPlatform.entries()]
+    .map(([platform, bucket]) => ({
+      platform: platform as SocialTrendingSourceCount['platform'],
+      label: PLATFORM_LABEL[platform] ?? platform,
+      total: bucket.total,
+      rank: bucket.rank,
+      region: bucket.region,
+      capturedAt: bucket.capturedAt,
+    }))
+    .sort((a, b) => b.total - a.total)
+
   return {
     window,
     from: iso(from),
     to: iso(now),
     capturedAt,
     items: sorted,
-    sources: { xTrends, hashtags },
+    sources: counts,
+    breakdown,
+    // Jendela Google yang benar-benar tersedia (dipakai UI untuk memilih tab).
+    windows: [...windows.entries()]
+      .map(([hoursValue, bucket]) => ({
+        hours: hoursValue,
+        total: bucket.total,
+        capturedAt: bucket.capturedAt,
+      }))
+      .sort((a, b) => a.hours - b.hours),
   }
 }
 

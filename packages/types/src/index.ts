@@ -4,7 +4,13 @@
  * Eden Treaty client without surprises.
  */
 
-export const SOURCE_PLATFORMS = ['NEWS_MEDIA', 'TWITTER_X', 'YOUTUBE', 'TIKTOK'] as const
+export const SOURCE_PLATFORMS = [
+  'NEWS_MEDIA',
+  'TWITTER_X',
+  'YOUTUBE',
+  'TIKTOK',
+  'GOOGLE_TRENDS',
+] as const
 export type SourcePlatform = (typeof SOURCE_PLATFORMS)[number]
 
 export const SENTIMENT_LABELS = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'] as const
@@ -297,17 +303,48 @@ export interface SseAlertEvent {
 export type TrendingWindow = '24h' | '7d'
 export type FigurePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly'
 
+/** Jenis tren: X trend, hashtag sosial, Google search, atau sound TikTok. */
+export type TrendType = 'x_trend' | 'hashtag' | 'google_search' | 'tiktok_sound'
+
+/** `volume` = besaran yang dilaporkan platform, `rank` = urutan asli feed. */
+export type TrendSort = 'volume' | 'rank'
+
 export interface SocialTrendItem {
   name: string
-  type: 'x_trend' | 'hashtag'
+  type: TrendType
   platform: SourcePlatform
   rank: number | null
   volume: number
+  /** Label volume asli dari platform, mis. "1000+" atau "157,4 jt tayangan". */
+  volumeLabel: string | null
   deltaPct: number | null
   negativeRatio: number
   sourceCount: number
   url: string | null
+  imageUrl: string | null
+  sourceName: string | null
+  /** Kapan tren itu muncul/diperbarui menurut platform (bukan waktu polling). */
+  publishedAt: string | null
   lastSeenAt: string | null
+  /** Jendela waktu Google Trends (4/24/48/168 jam); null untuk platform lain. */
+  windowHours: number | null
+  /** Query terkait dari Google Trends ("bsu", "cek bsu", …). */
+  relatedQueries: string[]
+  /** Jumlah artikel berita yang ditautkan Google. */
+  newsCount: number | null
+  /** `trending_page` (scrape) atau `rss` (cadangan). */
+  dataSource: string | null
+}
+
+/** Ringkasan per platform untuk header panel trending. */
+export interface SocialTrendingSourceCount {
+  platform: SourcePlatform
+  label: string
+  total: number
+  rank: number | null
+  /** Wilayah sumber tren: "Indonesia", "ID", atau WOEID. */
+  region: string | null
+  capturedAt: string | null
 }
 
 export interface SocialTrendingResult {
@@ -318,8 +355,13 @@ export interface SocialTrendingResult {
   items: SocialTrendItem[]
   sources: {
     xTrends: number
+    googleTrends: number
+    tiktokTrends: number
     hashtags: number
   }
+  breakdown: SocialTrendingSourceCount[]
+  /** Jendela waktu Google Trends yang tersedia di database. */
+  windows: Array<{ hours: number; total: number; capturedAt: string | null }>
 }
 
 export interface FigureTrendItem {

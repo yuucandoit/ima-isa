@@ -37,6 +37,21 @@ export function getPublisher(): Redis | null {
 }
 
 /**
+ * Tandai bahwa dashboard sedang membuka trending. Worker Python memakai kunci ini
+ * untuk menghemat bandwidth: scrape halaman Google (±154 KB/request) hanya
+ * dilakukan saat ada penonton, atau sekali sejam bila sepi.
+ */
+export function markTrendInterest(platform: string, ttlSeconds = 900): void {
+  const client = publisher
+  if (!client) return
+  client
+    .set(`trends:interest:${platform.toLowerCase()}`, '1', 'EX', ttlSeconds)
+    .catch(() => {
+      /* best-effort: kegagalan Redis tidak boleh menggagalkan request */
+    })
+}
+
+/**
  * Bridge Redis pub/sub (fed by the Python workers) into the in-process SSE hub,
  * and mirror a few channels for observability.
  */

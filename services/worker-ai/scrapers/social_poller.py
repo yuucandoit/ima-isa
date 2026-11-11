@@ -1,5 +1,7 @@
 """Social media adapters (X/Twitter API v2 + YouTube public RSS).
 
+Tren X/TikTok/Google **tidak** diambil di sini — lihat `trends_poller.py`.
+
 Both adapters are optional and disabled unless credentials / channel IDs are
 configured. They push the same `media:raw` payload contract as the RSS poller.
 """
@@ -134,88 +136,6 @@ def poll_youtube(client: redis.Redis) -> int:
     return pushed
 
 
-def poll_x_trends() -> int:
-    """Ambil daftar trending X untuk WOEID tertentu dan simpan ke social_trends."""
-    if not settings.x_bearer_token:
-        return 0
-
-    url = f"https://api.x.com/2/trends/by/woeid/{settings.x_trends_woeid}"
-    try:
-        response = requests.get(
-            url,
-            headers={
-                "Authorization": f"Bearer {settings.x_bearer_token}",
-                "User-Agent": settings.user_agent,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        body = response.json()
-    except Exception as error:
-        logger.warning("X trends poll failed: %s", error)
-        return 0
-
-    trends = body.get("data") or body.get("trends") or []
-    if not trends:
-        logger.info("X trends: tidak ada data untuk WOEID %s", settings.x_trends_woeid)
-        return 0
-
-    rows: list[tuple[Any, ...]] = []
-    seen: set[str] = set()
-    for rank, trend in enumerate(trends, start=1):
-        if not isinstance(trend, dict):
-            continue
-        name = str(
-            trend.get("trend_name")
-            or trend.get("name")
-            or trend.get("query")
-            or ""
-        ).strip()
-        if not name or name.lower() in seen:
-            continue
-        seen.add(name.lower())
-        volume = trend.get("tweet_count") or trend.get("tweet_volume")
-        try:
-            volume_value = int(volume) if volume is not None else None
-        except (TypeError, ValueError):
-            volume_value = None
-        query = trend.get("query") or name
-        rows.append(
-            (
-                settings.x_trends_region,
-                settings.x_trends_woeid,
-                name,
-                rank,
-                volume_value,
-                f"https://x.com/search?q={quote(str(query))}",
-                json.dumps(trend, ensure_ascii=False),
-            )
-        )
-
-    if not rows:
-        return 0
-
-    try:
-        with db.cursor() as cur:
-            cur.execute(
-                "DELETE FROM social_trends WHERE captured_at < now() - interval '7 days'"
-            )
-            cur.executemany(
-                """
-                INSERT INTO social_trends
-                    (platform, region, woeid, name, rank, tweet_volume, url, raw)
-                VALUES ('TWITTER_X', %s, %s, %s, %s, %s, %s, %s::jsonb)
-                """,
-                rows,
-            )
-    except Exception as error:
-        logger.warning("X trends insert failed: %s", error)
-        return 0
-
-    logger.info("X trends: %d tren disimpan untuk %s", len(rows), settings.x_trends_region)
-    return len(rows)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="X/Twitter + YouTube poller")
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
@@ -240,12 +160,9 @@ def main() -> None:
     while True:
         try:
             pushed = poll_x(client) + poll_youtube(client)
-            trends = poll_x_trends()
-            logger.info(
-                "social cycle done: %d new payloads, %d trends",
-                pushed,
-                trends,
-            )
+            # Tren (X/TikTok/Google) ditangani `trends_poller.py` agar kadens
+            # per platform bisa berbeda dan tidak ada dua penulis snapshot.
+            logger.info("social cycle done: %d new payloads", pushed)
         except Exception as error:
             logger.warning("social cycle failed: %s", error)
         if args.once:

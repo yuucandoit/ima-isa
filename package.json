@@ -24,13 +24,17 @@
     "worker": "bash scripts/py -m main",
     "worker:poll": "bash scripts/py -m scrapers.rss_poller",
     "worker:cluster": "bash scripts/py -m cluster_worker",
+    "worker:clean": "bash scripts/py clean_bodies.py",
+    "worker:clean:apply": "bash scripts/py clean_bodies.py --apply --refresh-nlp --rewrite-url",
     "test": "bun run --cwd apps/api test",
     "test:worker": "bash scripts/py -m unittest discover -s tests -v",
     "worker:social": "bash scripts/py -m scrapers.social_poller",
+    "worker:trends": "bash scripts/py trends_poller.py",
+    "worker:trends:probe": "bash scripts/py trends_poller.py --probe",
     "worker:setup": "cd services/worker-ai && (python3.12 -m venv .venv || python3.11 -m venv .venv || python3 -m venv .venv) && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt",
     "worker:setup:ai": "cd services/worker-ai && .venv/bin/pip install -r requirements-ai.txt && .venv/bin/python -m spacy download id_core_news_lg",
-    "dev:worker": "concurrently -n ai,poll,social,cluster -c green,yellow,blue,red \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\"",
-    "dev:all": "concurrently -n api,web,ai,poll,social,cluster -c cyan,magenta,green,yellow,blue,red \"bun run dev:api\" \"bun run dev:web\" \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\""
+    "dev:worker": "concurrently -n ai,poll,social,cluster,trends -c green,yellow,blue,red,magenta \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\" \"bun run worker:trends\"",
+    "dev:all": "concurrently -n api,web,ai,poll,social,cluster,trends -c cyan,magenta,green,yellow,blue,red,magenta \"bun run dev:api\" \"bun run dev:web\" \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\" \"bun run worker:trends\""
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

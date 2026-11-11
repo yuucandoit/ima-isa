@@ -20,6 +20,7 @@ export const sourcePlatformEnum = pgEnum('source_platform', [
   'TWITTER_X',
   'YOUTUBE',
   'TIKTOK',
+  'GOOGLE_TRENDS',
 ])
 
 export const sentimentEnum = pgEnum('sentiment_label', ['POSITIVE', 'NEUTRAL', 'NEGATIVE'])
@@ -117,7 +118,7 @@ export const monitoredKeywords = pgTable('monitored_keywords', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 })
 
-/** Tren media sosial hasil polling X Trends API (opsional). */
+/** Tren dari X/Twitter, TikTok, dan Google Trends (snapshot berkala). */
 export const socialTrends = pgTable(
   'social_trends',
   {
@@ -128,6 +129,18 @@ export const socialTrends = pgTable(
     name: text('name').notNull(),
     rank: integer('rank'),
     tweetVolume: integer('tweet_volume'),
+    /** Label volume asli dari platform, mis. "1000+" atau "157.4M tayangan". */
+    volumeLabel: varchar('volume_label', { length: 80 }),
+    /** `trend` | `hashtag` | `search` | `sound`. */
+    trendType: varchar('trend_type', { length: 20 }).notNull().default('trend'),
+    /** Jendela waktu Google Trends (4/24/48/168 jam); null untuk platform lain. */
+    windowHours: integer('window_hours'),
+    /** Query terkait yang dilaporkan platform. */
+    relatedQueries: jsonb('related_queries').$type<string[]>(),
+    /** Jumlah artikel berita yang ditautkan Google Trends. */
+    newsCount: integer('news_count'),
+    sourceName: varchar('source_name', { length: 160 }),
+    imageUrl: text('image_url'),
     url: text('url'),
     raw: jsonb('raw'),
     capturedAt: timestamp('captured_at', { withTimezone: true }).defaultNow().notNull(),
@@ -136,6 +149,9 @@ export const socialTrends = pgTable(
     index('idx_social_trends_captured').on(table.capturedAt),
     index('idx_social_trends_platform').on(table.platform),
     index('idx_social_trends_name').on(table.name),
+    index('idx_social_trends_captured_platform').on(table.platform, table.capturedAt),
+    index('idx_social_trends_type').on(table.trendType),
+    index('idx_social_trends_window').on(table.platform, table.windowHours, table.capturedAt),
   ],
 )
 

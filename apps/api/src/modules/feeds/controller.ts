@@ -35,6 +35,7 @@ export const feedsRoutes = new Elysia({ prefix: '/feeds', tags: ['Feeds'] })
             t.Literal('TWITTER_X'),
             t.Literal('YOUTUBE'),
             t.Literal('TIKTOK'),
+            t.Literal('GOOGLE_TRENDS'),
           ]),
         ),
         sourceId: optionalUuid,

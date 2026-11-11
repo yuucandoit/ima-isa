@@ -15,6 +15,48 @@
       "when": 1794285818081,
       "tag": "0001_curly_layla_miller",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794331008702,
+      "tag": "0002_trending_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794363316226,
+      "tag": "0003_trend_published_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794363461246,
+      "tag": "0004_trends_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794367539079,
+      "tag": "0005_trend_windows",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794367715924,
+      "tag": "0006_trends_purge_rss",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794367802816,
+      "tag": "0007_trends_dedupe",
+      "breakpoints": true
     }
   ]
 }

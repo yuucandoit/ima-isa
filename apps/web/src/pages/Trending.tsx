@@ -4,8 +4,11 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Flame,
+  Globe,
   Hash,
+  Music2,
   RefreshCw,
+  Search,
   TrendingUp,
   Users,
 } from 'lucide-react'
@@ -18,7 +21,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import type { FigurePeriod, TrendingWindow } from '@media-intel/types'
+import type { FigurePeriod, SocialTrendItem, TrendSort, TrendingWindow } from '@media-intel/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -40,6 +43,38 @@ import { cn } from '@/lib/utils'
 const SOCIAL_WINDOWS: Array<{ value: TrendingWindow; label: string }> = [
   { value: '24h', label: '24 jam' },
   { value: '7d', label: '7 hari' },
+]
+
+type TrendTab = 'all' | 'TWITTER_X' | 'TIKTOK' | 'GOOGLE_TRENDS'
+
+const TREND_TABS: Array<{ value: TrendTab; label: string; icon: typeof Flame }> = [
+  { value: 'all', label: 'Semua', icon: TrendingUp },
+  { value: 'TWITTER_X', label: 'X', icon: Flame },
+  { value: 'TIKTOK', label: 'TikTok', icon: Music2 },
+  { value: 'GOOGLE_TRENDS', label: 'Google', icon: Globe },
+]
+
+const TREND_TYPE_META: Record<
+  SocialTrendItem['type'],
+  { label: string; icon: typeof Flame; badge: 'warning' | 'secondary' | 'outline' }
+> = {
+  x_trend: { label: 'X Trend', icon: Flame, badge: 'warning' },
+  google_search: { label: 'Google', icon: Search, badge: 'outline' },
+  hashtag: { label: 'Hashtag', icon: Hash, badge: 'secondary' },
+  tiktok_sound: { label: 'Sound', icon: Music2, badge: 'secondary' },
+}
+
+type GoogleWindow = '4' | '24' | '168'
+
+const GOOGLE_HOURS: Array<{ value: GoogleWindow; label: string }> = [
+  { value: '4', label: '4 jam' },
+  { value: '24', label: '24 jam' },
+  { value: '168', label: '7 hari' },
+]
+
+const SORT_OPTIONS: Array<{ value: TrendSort; label: string }> = [
+  { value: 'volume', label: 'Volume' },
+  { value: 'rank', label: 'Peringkat feed' },
 ]
 
 const FIGURE_PERIODS: Array<{ value: FigurePeriod; label: string }> = [
@@ -75,6 +110,30 @@ function DeltaBadge({ value }: { value: number | null }) {
   )
 }
 
+/** Tab jendela hanya muncul untuk jendela yang datanya ada di server. */
+function GoogleWindowTabs({
+  value,
+  onChange,
+}: {
+  value: GoogleWindow
+  onChange: (value: GoogleWindow) => void
+}) {
+  const query = useSocialTrending('24h', 'GOOGLE_TRENDS', 'volume', 24)
+  const available = new Set((query.data?.windows ?? []).map((item) => item.hours))
+  const options = GOOGLE_HOURS.filter(
+    (option) => available.size === 0 || available.has(Number(option.value)),
+  )
+  if (options.length < 2) return null
+  return (
+    <SegmentedTabs label="Jendela waktu" value={value} onChange={onChange} options={options} />
+  )
+}
+
+function snapshotAgeSeconds(isoDate: string | null): number | null {
+  if (!isoDate) return null
+  return (Date.now() - Date.parse(isoDate)) / 1000
+}
+
 function ShareBar({ value, max, color }: { value: number; max: number; color: string }) {
   return (
     <div className="h-1 w-full overflow-hidden rounded-full bg-secondary">
@@ -86,8 +145,50 @@ function ShareBar({ value, max, color }: { value: number; max: number; color: st
   )
 }
 
-function SocialContent({ window }: { window: TrendingWindow }) {
-  const query = useSocialTrending(window)
+function SourcePills({
+  breakdown,
+}: {
+  breakdown: NonNullable<ReturnType<typeof useSocialTrending>['data']>['breakdown']
+}) {
+  if (!breakdown?.length) return null
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {breakdown.map((item) => (
+        <Badge key={item.platform} variant="outline" className="gap-1 font-normal">
+          {item.platform === 'GOOGLE_TRENDS' ? (
+            <Globe className="h-3 w-3" />
+          ) : item.platform === 'TIKTOK' ? (
+            <Music2 className="h-3 w-3" />
+          ) : (
+            <Flame className="h-3 w-3" />
+          )}
+          {item.label}
+          {item.region ? (
+            <span className="text-muted-foreground/60">{item.region}</span>
+          ) : null}
+          <span className="font-mono tabular-nums text-muted-foreground">{item.total}</span>
+          {item.capturedAt ? (
+            <span className="text-muted-foreground/70">· {formatRelative(item.capturedAt)}</span>
+          ) : null}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+function SocialContent({
+  window,
+  tab,
+  sort,
+  hours,
+}: {
+  window: TrendingWindow
+  tab: TrendTab
+  sort: TrendSort
+  hours: number
+}) {
+  const platform = tab === 'all' ? undefined : (tab as 'TWITTER_X' | 'TIKTOK' | 'GOOGLE_TRENDS')
+  const query = useSocialTrending(window, platform, sort, hours)
   const maxVolume = Math.max(1, ...(query.data?.items.map((item) => item.volume) ?? [0]))
 
   if (query.isError) {
@@ -110,11 +211,22 @@ function SocialContent({ window }: { window: TrendingWindow }) {
   }
 
   if (!query.data || query.data.items.length === 0) {
+    const hints: Record<string, string> = {
+      TWITTER_X:
+        'X trends diambil dari API resmi (X_BEARER_TOKEN) atau cookie login (X_AUTH_TOKEN + X_CT0). Jalankan `bun run worker:trends -- --once --platform x`.',
+      TIKTOK:
+        'TikTok trends diambil dari Creative Center (butuh TIKTOK_SESSION_COOKIE) atau Discover feed publik. Jalankan `bun run worker:trends -- --once --platform tiktok`.',
+      GOOGLE_TRENDS:
+        'Google Trends memakai RSS publik — tidak perlu kredensial. Jalankan `bun run worker:trends -- --once --platform google`.',
+    }
     return (
       <EmptyState
         icon={Flame}
-        title="Belum ada data trending sosial"
-        description="Trending diambil dari X Trends API (butuh X_BEARER_TOKEN) dan hashtag pada post sosial yang sudah di-ingest. Isi kredensial di .env lalu jalankan `bun run worker:social -- --once`."
+        title="Belum ada data trending"
+        description={
+          hints[tab] ??
+          'Snapshot tren diambil oleh worker (X, TikTok, Google Trends) dan hashtag dari post sosial yang sudah di-ingest. Jalankan `bun run worker:trends -- --once`.'
+        }
         action={
           <Button size="sm" variant="outline" onClick={() => query.refetch()}>
             <RefreshCw className="h-3.5 w-3.5" />
@@ -128,66 +240,106 @@ function SocialContent({ window }: { window: TrendingWindow }) {
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
-        <div>
-          <CardTitle>Trending sosial</CardTitle>
+        <div className="min-w-0">
+          <CardTitle>Trending</CardTitle>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            X trends {formatNumber(query.data.sources.xTrends)} · hashtag{' '}
+            X {formatNumber(query.data.sources.xTrends)} · Google{' '}
+            {formatNumber(query.data.sources.googleTrends)} · TikTok{' '}
+            {formatNumber(query.data.sources.tiktokTrends)} · hashtag{' '}
             {formatNumber(query.data.sources.hashtags)}
             {query.data.capturedAt
               ? ` · diperbarui ${formatRelative(query.data.capturedAt)}`
               : ''}
           </p>
+          <div className="mt-2">
+            <SourcePills breakdown={query.data.breakdown} />
+          </div>
         </div>
-        <Badge variant="outline" className="font-mono">
-          {window === '24h' ? '24 jam' : '7 hari'}
-        </Badge>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline" className="font-mono">
+            {window === '24h' ? '24 jam' : '7 hari'}
+          </Badge>
+          {(() => {
+            const age = snapshotAgeSeconds(query.data.capturedAt)
+            if (age === null) return null
+            // Feed Google berganti tiap ±1 menit; di atas 5 menit data sudah
+            // tidak mewakili daftar yang tampil di trends.google.com.
+            const stale = age > (tab === 'GOOGLE_TRENDS' || tab === 'all' ? 900 : 300)
+            return (
+              <Badge
+                variant={stale ? 'warning' : 'secondary'}
+                className="font-normal"
+                title={
+                  stale
+                    ? 'Snapshot lebih tua dari 15 menit — worker tren mungkin belum jalan.'
+                    : 'Umur snapshot terbaru dari worker tren'
+                }
+              >
+                snapshot {formatRelative(query.data.capturedAt ?? '')}
+              </Badge>
+            )
+          })()}
+        </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {query.data.items.map((item, index) => (
-          <a
-            key={`${item.type}-${item.name}`}
-            href={item.url ?? undefined}
-            target="_blank"
-            rel="noreferrer"
-            className="group block rounded-md border border-border/50 bg-background/30 px-3 py-2.5 transition-colors hover:border-border hover:bg-secondary/30"
-          >
-            <div className="flex items-center gap-2">
-              <span className="w-6 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-                {String(item.rank ?? index + 1).padStart(2, '0')}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90 group-hover:text-foreground">
-                {item.type === 'hashtag' ? (
-                  <Hash className="mr-0.5 inline h-3 w-3 text-accent" />
-                ) : (
-                  <Flame className="mr-0.5 inline h-3 w-3 text-warning" />
-                )}
-                {item.name}
-              </span>
-              <Badge variant={item.type === 'x_trend' ? 'warning' : 'secondary'}>
-                {item.type === 'x_trend' ? 'X Trend' : 'Hashtag'}
-              </Badge>
-              <DeltaBadge value={item.deltaPct} />
-            </div>
-            <div className="mt-1.5 flex items-center gap-3 pl-8">
-              <ShareBar
-                value={item.volume}
-                max={maxVolume}
-                color={item.type === 'x_trend' ? 'hsl(var(--warning))' : 'hsl(var(--accent))'}
-              />
-              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-                {formatNumber(item.volume)} sebutan
-              </span>
-              {item.negativeRatio > 0 ? (
-                <span className="shrink-0 font-mono text-[10px] tabular-nums text-negative">
-                  {formatPercent(item.negativeRatio)} negatif
+        {query.data.items.map((item, index) => {
+          const meta = TREND_TYPE_META[item.type] ?? TREND_TYPE_META.hashtag
+          const Icon = meta.icon
+          return (
+            <a
+              key={`${item.platform}-${item.type}-${item.name}`}
+              href={item.url ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              className="group block rounded-md border border-border/50 bg-background/30 px-3 py-2.5 transition-colors hover:border-border hover:bg-secondary/30"
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-6 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                  {String(index + 1).padStart(2, '0')}
                 </span>
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90 group-hover:text-foreground">
+                  <Icon className="mr-0.5 inline h-3 w-3 text-accent" />
+                  {item.name}
+                </span>
+                <Badge variant={meta.badge}>{meta.label}</Badge>
+                <DeltaBadge value={item.deltaPct} />
+              </div>
+              <div className="mt-1.5 flex items-center gap-3 pl-8">
+                <ShareBar
+                  value={item.volume}
+                  max={maxVolume}
+                  color={
+                    item.platform === 'GOOGLE_TRENDS'
+                      ? 'hsl(var(--primary))'
+                      : item.platform === 'TIKTOK'
+                        ? 'hsl(var(--accent))'
+                        : 'hsl(var(--warning))'
+                  }
+                />
+                <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                  {item.volumeLabel ?? (item.volume > 0 ? `${formatNumber(item.volume)} sebutan` : '—')}
+                </span>
+                {item.negativeRatio > 0 ? (
+                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-negative">
+                    {formatPercent(item.negativeRatio)} negatif
+                  </span>
+                ) : null}
+                <span className="hidden shrink-0 text-[9px] text-muted-foreground/60 sm:inline">
+                  {PLATFORM_LABEL[item.platform] ?? item.platform}
+                  {item.windowHours ? ` ${item.windowHours}j` : ''}
+                  {item.dataSource === 'rss' ? ' · RSS' : ''}
+                  {item.newsCount ? ` · ${formatNumber(item.newsCount)} berita` : ''}
+                  {item.publishedAt ? ` · ${formatRelative(item.publishedAt)}` : ''}
+                </span>
+              </div>
+              {item.relatedQueries.length > 1 ? (
+                <p className="mt-1 truncate pl-8 text-[9px] text-muted-foreground/70">
+                  terkait: {item.relatedQueries.slice(1, 5).join(' · ')}
+                </p>
               ) : null}
-              <span className="hidden shrink-0 text-[9px] text-muted-foreground/60 sm:inline">
-                {PLATFORM_LABEL[item.platform] ?? item.platform}
-              </span>
-            </div>
-          </a>
-        ))}
+            </a>
+          )
+        })}
       </CardContent>
     </Card>
   )
@@ -353,6 +505,9 @@ function FiguresContent({ period }: { period: FigurePeriod }) {
 
 export default function TrendingPage() {
   const [tab, setTab] = useState<'social' | 'figures'>('social')
+  const [trendTab, setTrendTab] = useState<TrendTab>('all')
+  const [trendSort, setTrendSort] = useState<TrendSort>('volume')
+  const [googleHours, setGoogleHours] = useState<GoogleWindow>('24')
   const [window, setWindow] = useState<TrendingWindow>('24h')
   const [period, setPeriod] = useState<FigurePeriod>('weekly')
   const queryClient = useQueryClient()
@@ -406,17 +561,41 @@ export default function TrendingPage() {
 
       {tab === 'social' ? (
         <>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <SegmentedTabs
+              label="Platform trending"
+              value={trendTab}
+              onChange={setTrendTab}
+              options={TREND_TABS.map(({ value, label }) => ({ value, label }))}
+            />
+            <SegmentedTabs
+              label="Urutkan"
+              value={trendSort}
+              onChange={setTrendSort}
+              options={SORT_OPTIONS}
+            />
+            {trendTab === 'GOOGLE_TRENDS' ? (
+              <GoogleWindowTabs value={googleHours} onChange={setGoogleHours} />
+            ) : null}
+          </div>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
             <Badge variant="outline" className="font-mono">
               <Flame className="h-3 w-3 text-warning" />
-              X Trends + hashtag
+              X · TikTok · Google Trends
             </Badge>
             <span>
-              Sumber: X Trends API (jika `X_BEARER_TOKEN` diisi) dan hashtag dari post
-              sosial yang sudah diproses AI worker.
+              Urut <strong className="text-foreground/80">volume</strong>:{' '}
+              <em>approx_traffic</em> Google, tayangan TikTok, jumlah sebutan hashtag.
+              Google diambil dari halaman <code>/trending</code> (140 tren/24 jam) — bukan
+              lagi RSS 10 item; fallback ke RSS otomatis bila struktur halaman berubah.
             </span>
           </div>
-          <SocialContent window={window} />
+          <SocialContent
+            window={window}
+            tab={trendTab}
+            sort={trendSort}
+            hours={Number(googleHours)}
+          />
         </>
       ) : (
         <>

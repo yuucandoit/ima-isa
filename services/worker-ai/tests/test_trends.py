@@ -174,3 +174,70 @@ class GoogleTrendingParseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── capture_google: jalur idle vs fallback RSS ───────────────────────────
+from types import SimpleNamespace  # noqa: E402
+
+import trends_poller as tp  # noqa: E402
+
+
+class CaptureGoogleTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.saved: list[tuple[list, dict]] = []
+        self._orig = (
+            tp.settings,
+            tp.should_skip_idle,
+            tp.fetch_google_trending,
+            tp.fetch_google_trends_rss,
+            tp.save_trends,
+        )
+        tp.settings = SimpleNamespace(
+            google_trends_source="page",
+            google_trends_windows=(24,),
+            google_trends_geo="ID",
+            google_trends_region="Indonesia",
+            trends_google_limit=200,
+            trends_interval_google=300,
+            trends_idle_interval_seconds=3600,
+        )
+        tp.save_trends = lambda items, region, **kw: self.saved.append((list(items), kw)) or len(items)
+
+    def tearDown(self) -> None:
+        (
+            tp.settings,
+            tp.should_skip_idle,
+            tp.fetch_google_trending,
+            tp.fetch_google_trends_rss,
+            tp.save_trends,
+        ) = self._orig
+
+    def test_idle_skip_tidak_menyentuh_data_maupun_rss(self) -> None:
+        tp.should_skip_idle = lambda *args, **kwargs: True
+        tp.fetch_google_trending = lambda *args, **kwargs: self.fail("tidak boleh fetch saat idle")
+        tp.fetch_google_trends_rss = lambda *args, **kwargs: self.fail("idle bukan alasan fallback ke RSS")
+
+        self.assertEqual(tp.capture_google(200, force=False), 0)
+        self.assertEqual(self.saved, [])
+
+    def test_scrape_gagal_baru_pakai_rss(self) -> None:
+        tp.should_skip_idle = lambda *args, **kwargs: False
+        tp.fetch_google_trending = lambda *args, **kwargs: []
+        tp.fetch_google_trends_rss = lambda *args, **kwargs: [
+            TrendItem(platform="GOOGLE_TRENDS", name="trip", rank=1, url="https://x", window_hours=24)
+        ]
+
+        self.assertEqual(tp.capture_google(200, force=True), 1)
+        self.assertEqual(len(self.saved), 1)
+        # RSS memang lebih kecil, jadi penggantian harus diizinkan.
+        self.assertEqual(self.saved[0][1]["min_replace_ratio"], 0.0)
+
+    def test_scrape_sukses_tidak_panggil_rss(self) -> None:
+        tp.should_skip_idle = lambda *args, **kwargs: False
+        tp.fetch_google_trending = lambda *args, **kwargs: [
+            TrendItem(platform="GOOGLE_TRENDS", name="ptun", rank=1, url="https://x", window_hours=24)
+        ]
+        tp.fetch_google_trends_rss = lambda *args, **kwargs: self.fail("RSS tidak perlu dipanggil")
+
+        self.assertEqual(tp.capture_google(200, force=True), 1)
+        self.assertEqual(len(self.saved), 1)

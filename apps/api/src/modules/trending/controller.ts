@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia'
 import { markTrendInterest } from '../../lib/redis'
-import { getFigureTrending, getSocialTrending } from './service'
+import { MAX_TRENDING_LIMIT, getFigureTrending, getSocialTrending } from './service'
 
 export const trendingRoutes = new Elysia({ prefix: '/trending', tags: ['Trending'] })
   .get(
@@ -22,7 +22,7 @@ export const trendingRoutes = new Elysia({ prefix: '/trending', tags: ['Trending
     {
       query: t.Object({
         window: t.Optional(t.Union([t.Literal('24h'), t.Literal('7d')])),
-        limit: t.Optional(t.Numeric({ minimum: 1, maximum: 50 })),
+        limit: t.Optional(t.Numeric({ minimum: 1, maximum: MAX_TRENDING_LIMIT })),
         platform: t.Optional(
           t.Union([
             t.Literal('TWITTER_X'),

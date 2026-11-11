@@ -115,30 +115,36 @@ def capture_google(limit: int, force: bool) -> int:
     )
 
     saved = 0
+    attempts = 0
     for hours in window_specs:
         if not force and should_skip_idle("google", hours):
-            logger.info("google(%sh): tidak ada penonton, lewati (interval idle %ss)", hours, settings.trends_idle_interval_seconds)
+            logger.info(
+                "google(%sh): tidak ada penonton, lewati (interval idle %ss)",
+                hours,
+                settings.trends_idle_interval_seconds,
+            )
             continue
         if not force and was_captured_recently("GOOGLE_TRENDS", interval, hours):
             logger.debug("google(%sh): snapshot < %ss, dilewati", hours, interval)
             continue
+
+        attempts += 1
         items = fetch_google_trending(settings.google_trends_geo, hours, settings.trends_google_limit)
-        if not items:
-            continue
-        saved += save_trends(
-            items,
-            settings.google_trends_region,
-            min_interval_seconds=interval,
-            force=force,
-        )
+        if items:
+            saved += save_trends(
+                items,
+                settings.google_trends_region,
+                min_interval_seconds=interval,
+                force=force,
+            )
 
-    if saved or window_specs:
-        if saved:
-            return saved
-        if not force and was_captured_recently("GOOGLE_TRENDS", interval, 24):
-            return 0
+    if saved:
+        return saved
+    # Tidak ada percobaan sama sekali (idle / kadens belum tiba): jangan sentuh data.
+    if attempts == 0:
+        return 0
 
-    # Fallback: RSS resmi (10 tren). Selalu ditandai `raw.source = "rss"`.
+    # Semua percobaan gagal (schema drift / blokir / error jaringan) → RSS resmi.
     logger.warning("Google Trends: halaman trending gagal, memakai RSS sebagai cadangan")
     items = fetch_google_trends_rss(settings.google_trends_geo, min(limit, 20))
     # RSS hanya 10 baris: izinkan menggantikan snapshot besar, karena menampilkan

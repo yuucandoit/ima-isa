@@ -15,6 +15,9 @@ import { type TrendSort, sortTrendItems } from './sort'
 
 type Row = Record<string, unknown>
 
+/** Batas atas `limit` untuk endpoint trending (dipakai service & controller). */
+export const MAX_TRENDING_LIMIT = 200
+
 const SOCIAL_WINDOWS: Record<TrendingWindow, number> = {
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
@@ -69,7 +72,8 @@ export async function getSocialTrending(
 ): Promise<SocialTrendingResult> {
   const window: TrendingWindow = query.window ?? '24h'
   const hours = [4, 24, 48, 168].includes(Number(query.hours)) ? Number(query.hours) : 24
-  const limit = Math.min(50, Math.max(1, query.limit ?? 20))
+  // Google mengembalikan 140+ tren; batas atas disamakan dengan controller (200).
+  const limit = Math.min(MAX_TRENDING_LIMIT, Math.max(1, query.limit ?? 20))
   const now = new Date()
   const from = new Date(now.getTime() - SOCIAL_WINDOWS[window])
   const previousFrom = new Date(from.getTime() - SOCIAL_WINDOWS[window])

@@ -35,6 +35,7 @@ Dashboard (React 19)     Vite · Tailwind · Recharts · MapLibre GL
 5. [Struktur monorepo](#5-struktur-monorepo)
 6. [Skema database](#6-skema-database)
 7. [API reference](#7-api-reference)
+   - [7.1 Autentikasi](#71-autentikasi) · [7.2 Bentuk respons error](#72-bentuk-respons-error)
 8. [Fitur per modul](#8-fitur-per-modul)
 9. [Sumber data](#9-sumber-data)
 10. [Perintah](#10-perintah)
@@ -257,9 +258,15 @@ LLM_MODEL=nama-model-yang-valid
 Catatan:
 
 - Karakter khusus pada password harus di-URL-encode di `DATABASE_URL` (mis. `@` → `%40`).
-- Bun tidak membaca `.env` di root repo saat proses dijalankan dari `apps/api`
-  (`bun run dev`, drizzle CLI). Buat symlink sekali: `ln -sfn ../../.env apps/api/.env`.
-  Di systemd tidak perlu — variabel di-inject lewat `EnvironmentFile`.
+- API memuat `.env` root otomatis (`apps/api/src/lib/load-env.ts`): urutan
+  prioritas process env → `apps/api/.env` → `.env` root. Tidak perlu symlink,
+  dan `drizzle.config.ts` juga membaca root `.env`. Di systemd tetap tidak
+  perlu — variabel di-inject lewat `EnvironmentFile` (menang atas file).
+- `.env` root berisi nilai yang di-*quote* dengan benar. Baris seperti
+  `X_QUERY=(Indonesia OR nasional) -is:retweet lang:id` tidak boleh
+  di-`source` di shell (tanda kurung akan dieksekusi); biarkan dibaca Bun/dotenv.
+- Verifikasi cepat bahwa konfigurasi terbaca: `GET /api/system/status` harus
+  menampilkan `"llm": "ok"` bila `LLM_URL` + `LLM_MODEL` valid.
 - `VITE_API_KEY` di-*bake* saat build dashboard. Bila `API_KEY` diisi, build ulang
   setiap kali key berubah (lihat 4.7).
 
@@ -571,7 +578,9 @@ IMA-ISA/
 │   └── web/                    # Vite + React 19 + Tailwind + shadcn-style UI
 │       └── src/
 │           ├── components/     # ui/ charts/ map/ feeds/ layout/ shared/
-│           ├── hooks/          # useSSE, useAnalytics, useTrending, useDebounce
+│           ├── features/clipping/  # UrlIngestForm, ClipPreviewCard, DistributionMatrix,
+│           │                       # ViralTriggerPanel, ClippingStudioPage
+│           ├── hooks/          # useSSE, useAnalytics, useTrending, useClipping, useDebounce
 │           ├── lib/            # api (Eden Treaty), format, utils
 │           └── pages/          # Overview, MediaMonitoring, TopicClusters, Trending,
 │                               # CrisisAlerts, Settings
@@ -581,6 +590,9 @@ IMA-ISA/
 │   │                           # google_news, trends/{google,google_trending,tiktok,x}
 │   ├── trends_poller.py        # trending X · TikTok · Google Trends
 │   ├── clean_bodies.py         # perapian badan artikel lama di DB
+│   ├── clipping/               # pipeline klip: ingestor, curator, renderer,
+│   │   │                       # distributor, viral_trigger, tracker, worker
+│   │   └── assets/filler_library/  # stok video filler split-screen (9:16)
 │   └── nlp/                    # normalizer, sentiment, ner, embedder, summarizer
 ├── deploy/nginx/               # config Nginx siap pakai (site + headers)
 ├── docker/init/                # ekstensi pgvector & pg_trgm
@@ -602,13 +614,19 @@ IMA-ISA/
 | `monitored_keywords` | Boolean watchlist | `boolean_query`, `is_active` |
 | `social_trends` | snapshot tren X/TikTok/Google | `platform`, `name`, `rank`, `tweet_volume` + `volume_label`, `trend_type`, `window_hours`, `source_published_at`, `related_queries` (jsonb), `news_count`, `raw` (jsonb), `captured_at` |
 | `alerts` | peringatan lonjakan | `severity`, `metrics_snapshot` (jsonb), `is_resolved` |
+| `clip_sources` | video sumber kliping | `url`, `platform`, `transcript_json` (word-level), `heatmap_json` (most-replayed), `status` |
+| `generated_clips` | klip hasil kurasi AI | `start_time`/`end_time`, `virality_score`, `ai_reasoning`, `render_mode`, `output_file_path`, `file_hash` (SHA-256) |
+| `clip_distributions` | distribusi multi-akun + payout | `account_username`, `device_serial`, `mutated_file_path`, `status`, metrik views/likes/saves, `cpm_rate_idr`, `estimated_revenue_idr` |
 
 Indeks: HNSW cosine pada `media_items.embedding`, B-tree pada `published_at`,
 `sentiment`, `source_id`, `platform`, `social_trends(platform, window_hours, captured_at)`,
 serta `alerts(triggered_at, severity, is_resolved)`.
 
 Migrasi `0002`–`0007` menambahkan enum `GOOGLE_TRENDS`, kolom tren baru, dan
-membersihkan snapshot lama (RSS 10 item + duplikat akumulatif).
+membersihkan snapshot lama (RSS 10 item + duplikat akumulatif). Migrasi `0008`
+menambahkan tiga tabel pipeline kliping beserta enum status/render. Tabel kliping
+memakai `serial` (bukan UUID) karena ID-nya dipakai sebagai nama file artefak
+(`clip_<id>.mp4`).
 
 ---
 
@@ -637,12 +655,80 @@ Semua endpoint berada di bawah `/api`.
 | POST | `/keywords/validate` | Uji sintaks Boolean |
 | POST/PATCH/DELETE | `/keywords[/:id]` | CRUD kata kunci |
 | GET/PATCH | `/sources[/:id]` | Daftar & toggle portal |
-| GET | `/system/status` | Status PostgreSQL, Redis, LLM, backlog worker |
+| GET | `/system/status` | Status PostgreSQL, Redis, LLM, backlog worker, dan kesehatan pipeline kliping (`clipping.worker` + antrean + dependensi hilang) |
+| POST | `/clipping/sources` | Submit URL video → job `clip:ingest` (yt-dlp + heatmap + Whisper) |
+| GET | `/clipping/sources` | Daftar sumber + status pipeline |
+| GET | `/clipping/sources/:id` | Detail sumber: transkrip word-level, heatmap, daftar klip |
+| POST | `/clipping/sources/:id/retry` | Ulangi ingest sumber gagal |
+| DELETE | `/clipping/sources/:id` | Hapus sumber + klip + distribusi (cascade) |
+| GET | `/clipping/clips` | Daftar klip hasil kurasi AI |
+| PATCH/DELETE | `/clipping/clips/:id` | Ubah hook/timing/mode atau hapus klip |
+| POST | `/clipping/clips/:id/render` | Render 9:16 (`split_screen` \| `face_reframe` \| `blur_background`) |
+| POST | `/clipping/clips/:id/approve` | Setujui / tolak klip |
+| POST | `/clipping/clips/:id/distribute` | Jadwalkan distribusi multi-akun + viral trigger |
+| GET | `/clipping/distributions` | Daftar distribusi + metrik + estimasi payout |
+| POST | `/clipping/distributions/:id/boost` | Picu drip-feed boost manual |
+| POST | `/clipping/distributions/track` | Paksa scrape metrik (cron: tiap 3 jam) |
+| GET | `/clipping/analytics/summary` | Agregasi views, retensi, payout CPM per platform |
 | POST | `/dev/seed` | Dataset demo (non-production) |
+| POST | `/auth/login` · `/auth/logout` | Sesi dashboard (cookie `httpOnly`) |
+| GET | `/auth/me` | Status sesi saat ini |
 | GET | `/health` · `/docs` | Health check & Swagger UI |
 
 Bila `API_KEY` di-set pada `.env`, endpoint mutasi memerlukan header `x-api-key`.
 Klien dashboard membaca `VITE_API_KEY` secara otomatis.
+
+### 7.1 Autentikasi
+
+Dashboard dilindungi login. Halaman `/login` menampilkan panel sinyal di kiri
+(cakupan 10 portal, tahapan pipeline, log SSE bergulir) dan form di kanan —
+di layar kecil panel kiri disembunyikan dan form memenuhi lebar.
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=ima-isa-2026     # WAJIB diganti sebelum deploy publik
+AUTH_REQUIRED=true              # false = matikan gerbang login (lokal saja)
+```
+
+| Method | Path | Deskripsi |
+| --- | --- | --- |
+| POST | `/api/auth/login` | Verifikasi kredensial → set cookie sesi `httpOnly` |
+| POST | `/api/auth/logout` | Hapus sesi (Redis + cookie) |
+| GET | `/api/auth/me` | Status sesi (`authenticated`, `via`, `authRequired`) |
+
+Model keamanan:
+
+- **Cookie `httpOnly` + `SameSite=Lax`.** Token tidak bisa dibaca JavaScript,
+  sehingga tidak bisa dicuri lewat XSS. `EventSource` SSE ikut mengirim cookie
+  karena same-origin, jadi live feed tetap jalan.
+- **Password di-hash argon2id** (`Bun.password`) dan diverifikasi constant-time,
+  termasuk perbandingan username — mencegah *timing attack* yang membocorkan
+  username valid.
+- **Rate limit login**: 8 percobaan gagal / 10 menit per IP (`429`).
+- **Sesi disimpan di Redis** (TTL 7 hari) sehingga bertahan saat API restart;
+  fallback in-memory bila Redis mati agar dashboard tidak terkunci.
+- **Otomasi tetap jalan.** Header `x-api-key` (`API_KEY` di `.env`) masih
+  diterima untuk `curl`, cron, dan integrasi — tidak perlu login manual.
+- `Secure` pada cookie hanya dipasang saat request HTTPS (mendukung
+  `X-Forwarded-Proto` di belakang nginx), supaya dev `http://localhost` tetap bisa.
+
+Semua endpoint di bawah `/api` dijaga satu `onBeforeHandle` global; hanya
+`/api/auth/*` yang dikecualikan. Bila `AUTH_REQUIRED=false` dan `API_KEY` kosong,
+API terbuka (mode pengembangan).
+
+### 7.2 Bentuk respons error
+
+Semua kegagalan mengembalikan JSON `{ "error": string, "details"?: unknown }`. Handler
+`onError` dipasang **sebelum** route (khususnya sebelum `group('/api')`) karena Elysia
+1.4 hanya menerapkan handler validasi pada route yang didaftarkan setelahnya.
+
+| Status | Kapan | Contoh `error` |
+| --- | --- | --- |
+| `401` | `API_KEY` di-set tapi header salah/kosong | `API key tidak valid.` |
+| `404` | Path tidak dikenal, atau entitas tidak ada | `Endpoint tidak ditemukan.` / `Artikel tidak ditemukan.` |
+| `422` | Skema TypeBox gagal (`details` berisi `path` + `message` per field) | `Validasi input gagal: Expected union value` |
+| `503` | PostgreSQL/Redis belum siap (`details` hanya saat `NODE_ENV != production`) | `Layanan data belum siap. Periksa PostgreSQL/Redis.` |
+| `500` | Kesalahan tak terduga (`details` hanya saat `NODE_ENV != production`) | `Terjadi kesalahan internal.` |
 
 ---
 
@@ -729,6 +815,136 @@ Klien dashboard membaca `VITE_API_KEY` secara otomatis.
   pemilih jendela 4 jam / 24 jam / 7 hari yang hanya muncul bila datanya tersedia)
   dan tab Tokoh dengan filter periode. Data ikut ter-refresh via SSE saat artikel
   baru masuk.
+
+### Modul 7 — Automated AI clipping & distribution (`clip.plan.md`)
+
+Pipeline event-driven yang mengubah video panjang menjadi klip vertikal siap-viral.
+Orkestrasi HTTP di Bun/Elysia, pemrosesan media berat di worker Python, komunikasi
+lewat Redis Streams (`clip:ingest`, `clip:render`, `clip:distribute`, `clip:boost`,
+`clip:track`).
+
+- **7.1 Ingest & deteksi viral multi-sinyal.** `yt-dlp --dump-json` mengambil metadata
+  + array `heatmap` ("most replayed"). Audio diekstrak ke 16 kHz mono untuk
+  `faster-whisper` (word timestamps) dan `librosa` (RMS per 2 detik). Ketiga sinyal
+  (heatmap · energi akustik · transkrip) dikirim ke LLM dengan prompt *structured JSON*:
+  hook < 3 detik, penutup kalimat selesai, durasi 30–75 detik, skor virality 1–100.
+  Tanpa LLM, curator tetap jalan memakai sliding-window heuristik (55% heatmap +
+  30% akustik + 15% kepadatan kata).
+- **7.2 Render 9:16 + mutasi hash.** Tiga mode: `split_screen` (1080×960 utama +
+  1080×960 filler via `vstack`, caption di garis tengah), `face_reframe` (crop
+  mengikuti wajah via MediaPipe, fallback crop tengah), dan `blur_background`
+  (16:9 + latar `gblur`). Caption `.ass` word-by-word dibakar dengan libass; bila
+  build FFmpeg tanpa libass, caption dirender per-kata lewat Pillow lalu di-`overlay`.
+  Setiap akun menerima varian unik: speed `1.005–1.015×`, `eq` mikro, crop 1–2%,
+  `-map_metadata -1`, CRF acak 21–23.
+- **7.3 Distribusi & viral trigger.** Upload via ADB (`uiautomator2`/`adb shell`) ke
+  TikTok/Reels/Shorts dengan rotasi IP seluler (airplane-mode toggle) per sesi.
+  Trigger human-like: search-to-watch (scroll FYP 2–3 video → Search → buka hasil),
+  watch-time 150–220% (loop), save 60% · copy-link 40% · like 80% · komentar 12%,
+  dan drip-feed jitter 3–12 menit (distribusi normal). Tanpa perangkat, sesi
+  berjalan dalam mode simulasi agar metrik dashboard tetap bergerak.
+- **7.4 Tracker & payout.** Cron tiap `CLIP_TRACKER_INTERVAL_SECONDS` (default 3 jam)
+  menarik metrik dari `post_url` (Playwright → ADB → simulasi), menghitung
+  `revenue = ⌊views/1000⌋ × cpm_rate_idr`, dan menandai `shadowbanned` + alert bila
+  `views < 10` setelah 6 jam terbit.
+- **7.5 Dashboard.** Halaman **Clipping Studio** (`/clipping`): form ingest, daftar
+  sumber live (polling + SSE `clipping`), kartu klip dengan skor virality dan tombol
+  render/setujui, dialog distribusi multi-akun, matriks distribusi + boost, panel
+  aturan viral trigger, dan tab **Analytics & Payout** (ledger per platform, status
+  distribusi, top klip).
+- **7.6 Visibilitas progres.** Status sumber tidak sekadar "Antre": setiap baris
+  menampilkan tahap pipeline (*Antre → Unduh → Transkripsi → Kurasi AI → Render →
+  Selesai*), lama waktu di tahap itu, dan alasan bila mandek. Panel detail
+  menampilkan stepper yang sama saat klip belum tersedia. Sumber dianggap **macet**
+  bila status aktifnya tidak berubah ≥ 2 menit, atau seketika bila worker mati.
+  Banner di atas halaman muncul saat worker tidak berjalan tapi ada job menunggu
+  (menyebut jumlah antrean dan perintah untuk menjalankannya) atau saat dependensi
+  opsional belum terpasang.
+
+Dua sinyal dipakai agar "sedang diproses" bisa dibedakan dari "tidak akan pernah
+jalan":
+
+1. **Heartbeat worker.** `clipping/worker.py` menulis `clipping:worker:heartbeat`
+   (TTL 120 s) tiap 15 detik berisi PID, host, mode dry-run, dan dependensi yang
+   benar-benar tersedia (`yt-dlp`, `faster-whisper`, `librosa`, `ffmpeg`, `adb`).
+   `GET /api/system/status` membaca key ini → `clipping.worker` bernilai
+   `online` / `idle` / `offline`, plus `missingDependencies`.
+2. **Kedalaman antrean.** Dihitung dari `lag` + `pending` consumer group, **bukan**
+   `XLEN` (yang ikut menghitung entri yang sudah di-ACK sehingga antrean kosong
+   tetap terlihat penuh).
+
+> Job `clip:ingest` bersifat idempoten: `retry` hanya mengantrekan ulang sumber
+> berstatus `failed`/`completed`, dan worker melewati job duplikat yang datang saat
+> sumber sudah `completed` atau sedang diproses.
+
+Konfigurasi ada di blok `CLIP_*` pada `.env.example`. Pasang dependensi opsional
+dengan `bun run worker:setup:clip`, jalankan worker dengan `bun run worker:clip`
+(atau `docker compose --profile clip up worker-clip`).
+
+**Mode uji tanpa dependensi berat.** `CLIP_DRY_RUN=true` menjalankan seluruh
+rantai (ingest → kurasi → render → approve → distribusi → tracker → analytics)
+tanpa yt-dlp/ffmpeg/Whisper/ADB:
+
+```bash
+CLIP_DRY_RUN=true bun run worker:clip
+# lalu dari dashboard: submit URL, atau
+curl -X POST localhost:3001/api/clipping/sources \
+  -H 'content-type: application/json' -d '{"url":"https://youtu.be/<id>"}'
+```
+
+Ingest menulis video *placeholder* + transkrip sintetis 120 detik, render
+menghasilkan berkas penanda + sidecar `.ass`, dan distribusi memakai varian
+file per akun dengan URL postingan placeholder. Metrik tracker disimulasikan
+sehingga grafik dashboard ikut bergerak. Semua artefak berada di
+`services/worker-ai/storage/clipping/` (di-*gitignore*).
+
+**Dependensi minimum untuk unduhan sungguhan.** `yt-dlp` wajib ada untuk
+mengambil video; `faster-whisper` hanya dibutuhkan untuk transkrip (caption),
+dan `librosa` untuk sinyal energi akustik. Tanpa `yt-dlp`, worker langsung
+menandai sumber `failed` dengan pesan yang menyebut cara memasangnya — bukan
+gagal diam-diam. Cukup `yt-dlp` saja sudah bisa mengunduh + merender klip
+(caption kosong):
+
+```bash
+services/worker-ai/.venv/bin/pip install yt-dlp
+bun run worker:clip
+```
+
+Install yang lengkap (butuh torch, ~2 GB): `bun run worker:setup:clip`.
+
+**Kegagalan selalu terlihat.** Job yang gagal masuk `clip:dead` **dan**
+menandai baris DB terkait sebagai `failed` beserta pesan penyebabnya
+(`downloading`/`analyzing` tidak pernah menggantung). Pesan error menyertakan
+baris terakhir stderr yt-dlp (video privat, geo-block, 403, butuh login)
+alih-alih pesan generik "gagal mengunduh".
+
+**Performa & memori render.** Klip 75 detik dirender dalam **~21 detik**
+(sebelumnya >12 menit) dengan puncak RAM worker 42 MB dan FFmpeg 204 MB. Empat
+optimasi yang membuatnya, semuanya terukur:
+
+| Optimasi | Sebelum | Sesudah |
+| --- | --- | --- |
+| Caption track | `overlay` berantai per state — kuadratik (10 state 15 s, 20 state 65 s, 40 state **241 s**) | `concat` demuxer, tanpa compositing (40 state **0,9 s**) |
+| Sumber yang diproses | `filter_complex` membaca seluruh video 21 menit (485 MB RSS, 20 s) | potong `-c copy` dulu → filter hanya 75 detik (~15 s, RAM tetap) |
+| Encoder | `libx264` software | `h264_videotoolbox` bila ada (CPU 20 s → 9 s) |
+| Audio → Whisper | `ffmpeg -i video` (ikut membuka stream video AV1) | `-vn -acodec pcm_s16le -ar 16000 -ac 1` |
+
+Tambahan:
+- **Model Whisper dilepas sebelum FFmpeg.** `release_whisper()` dipanggil di
+  `finally` (`del` + `gc.collect()` + `torch.cuda.empty_cache()` bila ada)
+  sehingga ±500 MB RAM model tidak menumpuk saat render.
+- **Batas thread & buffer.** `CLIP_FFMPEG_THREADS` (default 4) membatasi thread;
+  `-max_muxing_queue_size 1024` mencegah "Too many packets buffered".
+- **Artefak sementara dibersihkan** setelah render (ratusan PNG 1080×1920,
+  segmen, track alpha) — hanya `.mp4` dan sidecar `.ass` yang disimpan.
+- Semua pemanggilan FFmpeg punya timeout; render yang melewati batas gagal
+  dengan pesan jelas alih-alih menggantung.
+
+> Build FFmpeg Homebrew di macOS **tidak menyertakan `libass` maupun
+> `drawtext`**, jadi caption tidak bisa dibakar lewat filter `subtitles`.
+> Pipeline mendeteksi ini dan memakai jalur frame-sequence (Pillow → concat).
+> Sidecar `.ass` selalu disimpan agar caption bisa di-burn ulang dengan build
+> FFmpeg yang mendukung libass.
 
 ---
 
@@ -873,6 +1089,9 @@ sosial oleh Modul 6 di `/api/trending/social` (filter `?platform=`).
 | `bun run db:generate` / `db:migrate` / `db:push` / `db:seed` | siklus skema |
 | `bun run worker:setup` | buat venv + dependencies inti |
 | `bun run worker:setup:ai` | opsional: torch + spaCy + model IndoBERT |
+| `bun run worker:setup:clip` | opsional: yt-dlp, faster-whisper, librosa, pillow, playwright, uiautomator2 |
+| `bun run worker:clip` | worker pipeline kliping (ingest · kurasi · render · distribusi · tracker) |
+| `bun run dev:clip` | API + web + worker kliping |
 | `bun run worker` | AI enrichment daemon |
 | `bun run worker:poll` | RSS poller |
 | `bun run worker:social` | poller X/YouTube |
@@ -895,7 +1114,9 @@ sosial oleh Modul 6 di `/api/trending/social` (filter `?platform=`).
 | --- | --- | --- |
 | `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/media_intel` | PostgreSQL + pgvector |
 | `REDIS_URL` | `redis://localhost:6379` | Streams bus & pub/sub |
-| `API_KEY` / `VITE_API_KEY` | kosong | shared secret endpoint mutasi |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `ima-isa-2026` | kredensial login dashboard (**ganti sebelum publik**) |
+| `AUTH_REQUIRED` | `true` | `false` = matikan gerbang login (hanya lokal) |
+| `API_KEY` / `VITE_API_KEY` | kosong | shared secret untuk otomasi (`x-api-key`) |
 | `ALERT_VOLUME_MULTIPLIER` | `2.5` | ambang lonjakan volume |
 | `ALERT_NEGATIVE_RATIO` | `0.65` | ambang rasio negatif |
 | `ALERT_SCAN_INTERVAL_MS` | `300000` | interval pemindai |
@@ -925,13 +1146,34 @@ sosial oleh Modul 6 di `/api/trending/social` (filter `?platform=`).
 | `CLUSTER_DISTANCE_THRESHOLD` | `0` (auto) | cosine distance maksimum — 0.25 IndoBERT, 0.62 leksikal |
 | `CLUSTER_MIN_ITEMS` | `5` | minimum artikel per klaster |
 | `USE_TRANSFORMERS` / `USE_SPACY` | `false` di `.env.example` | mode ringan; set `true` untuk memakai IndoBERT/spaCy asli |
+| `CLIP_WORK_DIR` | `storage/clipping` | direktori video sumber, klip render, dan varian mutasi |
+| `CLIP_FILLER_DIR` | `clipping/assets/filler_library` | stok filler 9:16 untuk mode split-screen |
+| `CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS` | `30` / `75` | rentang durasi klip untuk prompt LLM |
+| `CLIP_MAX_PER_SOURCE` | `8` | jumlah klip maksimum per sumber |
+| `CLIP_WHISPER_MODEL` | `small` | `tiny`/`base`/`small`/`medium`/`large-v3` |
+| `CLIP_WHISPER_DEVICE` / `_COMPUTE` | `auto` / `int8` | akselerasi transkripsi |
+| `CLIP_YTDLP_MAX_HEIGHT` | `1080` | batas resolusi unduhan |
+| `CLIP_TRACKER_INTERVAL_SECONDS` | `10800` | cron tracker metrik (3 jam) |
+| `CLIP_SHADOWBAN_VIEWS` / `_HOURS` | `10` / `6` | kriteria deteksi shadowban |
+| `CLIP_DRY_RUN` | `false` | `true` = alur penuh tanpa ffmpeg/ADB/yt-dlp (placeholder + transkrip sintetis) |
+| `CLIP_HW_ENCODE` | `auto` | `auto`=VideoToolbox/NVENC bila ada; `videotoolbox`, `nvenc`, atau `none` (paksa libx264) |
+| `CLIP_FFMPEG_THREADS` | `4` | Batas thread FFmpeg agar RAM stabil saat render paralel |
+| `CLIP_BOOST_MAX_SESSIONS` | `50` | batas sesi boost per permintaan |
 
 ---
 
 ## 12. Catatan operasional
 
 - **Worker restart-safe**: pesan gagal dipindah ke `media:dead` lalu di-`XACK`, sehingga
-  antrean tidak pernah macet.
+  antrean tidak pernah macet. Worker kliping memakai pola yang sama dengan dead-letter
+  stream `clip:dead`, dan setiap stream punya konsumen thread sendiri agar ingest
+  tidak memblokir render/distribusi.
+- **Caption FFmpeg**: build FFmpeg tanpa `libass` tidak punya filter `subtitles`.
+  Worker mendeteksinya (`ffmpeg -filters`), lalu merender caption per kata dengan
+  Pillow dan membakarnya via `overlay`. Bila Pillow juga tidak ada, berkas `.ass`
+  tetap ditulis sebagai sidecar.
+- **Klip melewati durasi sumber** ditolak sebelum FFmpeg dipanggil (validasi
+  `ffprobe`), karena `trim=start=` di luar rentang membuat proses menggantung.
 - **Redis opsional**: bila Redis mati, API tetap melayani REST (SSE live nonaktif dan
   statusnya tampil di sidebar/settings).
 - **Seed idempoten**: eksternal ID demo bersifat deterministik; aman diulang.

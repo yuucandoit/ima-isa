@@ -34,3 +34,7 @@ models/
 
 # Drizzle
 apps/api/drizzle/meta/_journal.json.bak
+
+# Artefak pipeline clipping (video sumber, klip render, varian mutasi)
+storage/
+services/worker-ai/storage/

@@ -78,6 +78,46 @@ services:
       LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-15000}
     restart: unless-stopped
 
+  # Pipeline kliping berat (yt-dlp + whisper + ffmpeg + ADB bridge).
+  # Butuh akses ke device farm: pasang USB device atau jalankan adb server
+  # dengan `ADB_SERVER_SOCKET=tcp:host.docker.internal:5037`.
+  worker-clip:
+    profiles: ["clip"]
+    build:
+      context: ./services/worker-ai
+      args:
+        INSTALL_CLIP: "true"
+    container_name: media-intel-clip
+    command: ["python", "-m", "clipping.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-media_intel}
+      REDIS_URL: redis://redis:6379
+      LLM_URL: ${LLM_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-60000}
+      CLIP_WORK_DIR: /data/clipping
+      CLIP_FILLER_DIR: /app/clipping/assets/filler_library
+      CLIP_WHISPER_MODEL: ${CLIP_WHISPER_MODEL:-small}
+      CLIP_WHISPER_DEVICE: ${CLIP_WHISPER_DEVICE:-cpu}
+      CLIP_WHISPER_COMPUTE: ${CLIP_WHISPER_COMPUTE:-int8}
+      CLIP_DRY_RUN: ${CLIP_DRY_RUN:-false}
+      CLIP_TRACKER_INTERVAL_SECONDS: ${CLIP_TRACKER_INTERVAL_SECONDS:-10800}
+      ADB_SERVER_SOCKET: ${ADB_SERVER_SOCKET:-tcp:host.docker.internal:5037}
+    volumes:
+      - clip-data:/data/clipping
+      - ./services/worker-ai/clipping/assets/filler_library:/app/clipping/assets/filler_library:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
+  clip-data:

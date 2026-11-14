@@ -4,11 +4,20 @@ import type {
   AlertDTO,
   AlertSeverity,
   AnalyticsOverview,
+  ClipDistributionDTO,
+  ClipDistributionStatus,
+  ClippingAnalyticsSummary,
+  ClipRenderMode,
+  ClipSourceDTO,
+  ClipSourceDetailDTO,
+  ClipSourceStatus,
+  ClipTargetPlatform,
   ClusterDetail,
   ClusterDTO,
   FeedQuery,
   FigurePeriod,
   FigureTrendingResult,
+  GeneratedClipDTO,
   KeywordDTO,
   LocationAnalyticsResult,
   MediaItemDTO,
@@ -73,6 +82,65 @@ async function unwrap<T>(request: Promise<unknown>): Promise<T> {
 
 export function sseUrl(topics: string): string {
   return `${API_BASE}/api/feeds/stream?topics=${encodeURIComponent(topics)}`
+}
+
+/**
+ * URL absolut untuk berkas media yang di-stream API.
+ *
+ * `videoUrl` dari DTO berupa path relatif (`/api/clipping/clips/12/video`).
+ * Bila dashboard di-serve dari origin berbeda (`VITE_API_URL`), path itu harus
+ * ditempel ke origin API, bukan origin halaman.
+ */
+export function mediaUrl(
+  path: string | null | undefined,
+  options: { download?: boolean } = {},
+): string | null {
+  if (!path) return null
+  const url = path.startsWith('http') ? path : `${API_BASE}${path}`
+  if (!options.download) return url
+  return `${url}${url.includes('?') ? '&' : '?'}download=1`
+}
+
+/* ── Auth ──────────────────────────────────────────────────── */
+
+export interface SessionInfo {
+  authenticated: boolean
+  username: string | null
+  via: 'session' | 'api-key' | 'open' | null
+  authRequired: boolean
+}
+
+/** Endpoint auth memakai `fetch` biasa: cookie httpOnly dikirim otomatis. */
+async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}/api/auth${path}`, {
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  })
+  const payload = (await response.json().catch(() => ({}))) as T & { error?: string }
+  if (!response.ok) {
+    throw new ApiRequestError(payload.error ?? 'Permintaan gagal.', response.status)
+  }
+  return payload
+}
+
+export function fetchSession(): Promise<SessionInfo> {
+  return authRequest<SessionInfo>('/me')
+}
+
+export function loginRequest(username: string, password: string): Promise<{
+  authenticated: boolean
+  username: string
+  expiresInDays: number
+}> {
+  return authRequest('/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+export function logoutRequest(): Promise<{ authenticated: boolean }> {
+  return authRequest('/logout', { method: 'POST' })
 }
 
 /* ── Analytics ─────────────────────────────────────────────── */
@@ -285,3 +353,122 @@ export function seedDemoData(): Promise<{
 }
 
 export type { SentimentLabel, SourcePlatform }
+
+/* ── Clipping ──────────────────────────────────────────────── */
+
+export function fetchClipSources(params: {
+  status?: ClipSourceStatus
+  limit?: number
+  offset?: number
+} = {}): Promise<ClipSourceDTO[]> {
+  return unwrap<ClipSourceDTO[]>(
+    client.api.clipping.sources.get({ query: params }),
+  )
+}
+
+export function fetchClipSource(id: number): Promise<ClipSourceDetailDTO> {
+  return unwrap<ClipSourceDetailDTO>(client.api.clipping.sources({ id }).get())
+}
+
+export function ingestClipSource(body: {
+  url: string
+  maxClips?: number
+  language?: string
+  renderMode?: ClipRenderMode
+}): Promise<ClipSourceDTO> {
+  return unwrap<ClipSourceDTO>(client.api.clipping.sources.post(body))
+}
+
+export function retryClipSource(id: number): Promise<ClipSourceDTO> {
+  return unwrap<ClipSourceDTO>(client.api.clipping.sources({ id }).retry.post())
+}
+
+export function deleteClipSource(id: number): Promise<{ success: boolean }> {
+  return unwrap(client.api.clipping.sources({ id }).delete())
+}
+
+export function fetchClips(params: {
+  sourceId?: number
+  approvedOnly?: boolean
+  limit?: number
+} = {}): Promise<GeneratedClipDTO[]> {
+  return unwrap<GeneratedClipDTO[]>(
+    client.api.clipping.clips.get({
+      query: {
+        sourceId: params.sourceId,
+        approvedOnly: params.approvedOnly ? 'true' : undefined,
+        limit: params.limit,
+      },
+    }),
+  )
+}
+
+export function patchClip(
+  id: number,
+  body: { titleHook?: string; renderMode?: ClipRenderMode; isApproved?: boolean },
+): Promise<GeneratedClipDTO> {
+  return unwrap<GeneratedClipDTO>(client.api.clipping.clips({ id }).patch(body))
+}
+
+export function renderClip(
+  id: number,
+  body: { renderMode?: ClipRenderMode; fillerAsset?: string } = {},
+): Promise<{ clip: GeneratedClipDTO; queued: boolean }> {
+  return unwrap(client.api.clipping.clips({ id }).render.post(body))
+}
+
+export function approveClip(id: number, isApproved: boolean): Promise<GeneratedClipDTO> {
+  return unwrap<GeneratedClipDTO>(client.api.clipping.clips({ id }).approve.post({ isApproved }))
+}
+
+export function distributeClip(
+  id: number,
+  body: {
+    accounts: Array<{
+      targetPlatform: ClipTargetPlatform
+      accountUsername: string
+      deviceSerial?: string
+      cpmRateIdr?: number
+    }>
+    enableViralTrigger?: boolean
+    watchTimePct?: number
+    dripWindowMinutes?: number
+  },
+): Promise<{ distributions: ClipDistributionDTO[]; queued: boolean }> {
+  return unwrap(client.api.clipping.clips({ id }).distribute.post(body))
+}
+
+export function fetchDistributions(params: {
+  status?: ClipDistributionStatus
+  clipId?: number
+  account?: string
+  limit?: number
+} = {}): Promise<ClipDistributionDTO[]> {
+  return unwrap<ClipDistributionDTO[]>(
+    client.api.clipping.distributions.get({ query: params }),
+  )
+}
+
+export function boostDistribution(
+  id: number,
+  body: { sessions?: number; watchTimePct?: number; searchKeyword?: string } = {},
+): Promise<{ distribution: ClipDistributionDTO; queued: boolean }> {
+  return unwrap(client.api.clipping.distributions({ id }).boost.post(body))
+}
+
+export function requestTrack(distributionId?: number): Promise<{ queued: boolean }> {
+  return unwrap(
+    client.api.clipping.distributions.track.post(undefined, {
+      query: distributionId ? { distributionId } : undefined,
+    } as never),
+  )
+}
+
+export function fetchClippingAnalytics(params: {
+  from?: string
+  to?: string
+} = {}): Promise<ClippingAnalyticsSummary> {
+  return unwrap<ClippingAnalyticsSummary>(
+    client.api.clipping.analytics.summary.get({ query: params }),
+  )
+}

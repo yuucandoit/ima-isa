@@ -28,7 +28,7 @@ export function useSSE(topics: string, handlers: HandlerMap, enabled = true): Ss
     const connect = () => {
       if (disposed) return
       setStatus((current) => (current === 'connected' ? current : 'connecting'))
-      source = new EventSource(sseUrl(topics))
+      source = new EventSource(sseUrl(topics), { withCredentials: true })
 
       source.onopen = () => {
         attempt = 0

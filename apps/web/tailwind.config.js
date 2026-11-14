@@ -75,11 +75,16 @@ export default {
           '70%': { boxShadow: '0 0 0 6px hsl(var(--positive) / 0)' },
           '100%': { boxShadow: '0 0 0 0 hsl(var(--positive) / 0)' },
         },
+        shimmer: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(200%)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 200ms ease-out',
         'slide-in': 'slide-in 220ms ease-out',
         'pulse-ring': 'pulseRing 2s infinite',
+        shimmer: 'shimmer 1.8s infinite linear',
       },
     },
   },

@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Activity,
   Boxes,
   ChevronRight,
+  Clapperboard,
   LayoutDashboard,
+  LogOut,
   Newspaper,
   Radar,
   Settings,
@@ -11,8 +14,10 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { useAlerts } from '@/hooks/useAnalytics'
 import { useSystemStatus } from '@/hooks/useAnalytics'
+import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
 import { formatNumber } from '@/lib/format'
 
@@ -21,6 +26,7 @@ const NAV_ITEMS = [
   { to: '/media', label: 'Media Monitoring', icon: Newspaper },
   { to: '/clusters', label: 'Topic Clusters', icon: Boxes },
   { to: '/trending', label: 'Trending & Tokoh', icon: TrendingUp },
+  { to: '/clipping', label: 'Clipping Studio', icon: Clapperboard },
   { to: '/alerts', label: 'Crisis Alerts', icon: ShieldAlert },
   { to: '/settings', label: 'Pengaturan', icon: Settings },
 ]
@@ -56,6 +62,47 @@ function StatusRow({
           {state === 'loading' ? 'cek' : state === 'disabled' ? 'off' : state}
         </span>
       </span>
+    </div>
+  )
+}
+
+/** Identitas sesi + tombol keluar. */
+function SessionFooter() {
+  const { session, logout } = useAuth()
+  const [pending, setPending] = useState(false)
+
+  if (!session?.authenticated) return null
+
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-2">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10 font-mono text-[10px] uppercase text-primary">
+        {(session.username ?? '?').slice(0, 1)}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[11px] font-medium leading-none text-foreground/90">
+          {session.username}
+        </p>
+        <p className="mt-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground/60">
+          {session.via === 'api-key' ? 'api key' : 'sesi aktif'}
+        </p>
+      </div>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        title="Keluar"
+        aria-label="Keluar"
+        disabled={pending}
+        onClick={async () => {
+          setPending(true)
+          try {
+            await logout()
+          } finally {
+            setPending(false)
+          }
+        }}
+      >
+        <LogOut className="h-3 w-3" />
+      </Button>
     </div>
   )
 }
@@ -110,7 +157,7 @@ export function AppSidebar({
             Pemantauan
           </p>
           <ul className="space-y-0.5">
-            {NAV_ITEMS.slice(0, 5).map((item) => (
+            {NAV_ITEMS.slice(0, 6).map((item) => (
               <li key={item.to}>
                 <NavLink
                   to={item.to}
@@ -154,7 +201,7 @@ export function AppSidebar({
             Sistem
           </p>
           <ul className="space-y-0.5">
-            {NAV_ITEMS.slice(5).map((item) => (
+            {NAV_ITEMS.slice(6).map((item) => (
               <li key={item.to}>
                 <NavLink
                   to={item.to}
@@ -223,6 +270,8 @@ export function AppSidebar({
             </span>
           </div>
         </div>
+
+        <SessionFooter />
       </div>
     </aside>
   )

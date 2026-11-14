@@ -133,3 +133,61 @@ export function rangeFromPreset(preset: RangePreset): { from: string; to: string
   const from = new Date(to.getTime() - hours * 60 * 60 * 1000)
   return { from: from.toISOString(), to: to.toISOString() }
 }
+
+/* ── Clipping helpers ──────────────────────────────────────── */
+
+export type RenderMode = 'split_screen' | 'face_reframe' | 'blur_background'
+
+export const RENDER_MODE_LABEL: Record<RenderMode, string> = {
+  split_screen: 'Split-screen',
+  face_reframe: 'Face reframe',
+  blur_background: 'Blur background',
+}
+
+export const RENDER_MODE_HINT: Record<RenderMode, string> = {
+  split_screen: 'Video utama di atas + filler gameplay di bawah, caption di garis tengah',
+  face_reframe: '9:16 penuh dengan crop mengikuti wajah',
+  blur_background: 'Video 16:9 utuh dengan latar gaussian blur',
+}
+
+export const CLIP_SOURCE_STATUS_LABEL: Record<string, string> = {
+  pending: 'Menunggu',
+  downloading: 'Mengunduh',
+  transcribing: 'Transkripsi',
+  analyzing: 'Analisis AI',
+  rendering: 'Rendering',
+  completed: 'Selesai',
+  failed: 'Gagal',
+}
+
+export const CLIP_DIST_STATUS_LABEL: Record<string, string> = {
+  queued: 'Antre',
+  uploading: 'Mengunggah',
+  published: 'Terbit',
+  boosting: 'Boosting',
+  shadowbanned: 'Shadowban',
+  failed: 'Gagal',
+}
+
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+  const total = Math.round(seconds)
+  const minutes = Math.floor(total / 60)
+  const secs = total % 60
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60)
+    return `${hours}:${String(minutes % 60).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  }
+  return `${minutes}:${String(secs).padStart(2, '0')}`
+}
+
+const idr = new Intl.NumberFormat('id-ID', {
+  style: 'currency',
+  currency: 'IDR',
+  maximumFractionDigits: 0,
+})
+
+export function formatIdr(value: number): string {
+  if (!Number.isFinite(value)) return 'Rp0'
+  return idr.format(value)
+}

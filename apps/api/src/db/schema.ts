@@ -15,6 +15,10 @@ import {
 import { relations } from 'drizzle-orm'
 import type { NamedEntityBag } from '@media-intel/types'
 
+export * from './schema/clipping'
+import { clipDistributions, clipSources, generatedClips } from './schema/clipping'
+
+
 export const sourcePlatformEnum = pgEnum('source_platform', [
   'NEWS_MEDIA',
   'TWITTER_X',
@@ -222,3 +226,7 @@ export type MediaItemRow = typeof mediaItems.$inferSelect
 export type TopicClusterRow = typeof topicClusters.$inferSelect
 export type AlertRow = typeof alerts.$inferSelect
 export type KeywordRow = typeof monitoredKeywords.$inferSelect
+
+export type ClipSourceRow = typeof clipSources.$inferSelect
+export type GeneratedClipRow = typeof generatedClips.$inferSelect
+export type ClipDistributionRow = typeof clipDistributions.$inferSelect

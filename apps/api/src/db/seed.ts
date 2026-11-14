@@ -1,3 +1,4 @@
+import '../lib/load-env'
 import { sqlClient } from './index'
 
 const googleNews = (domain: string) =>

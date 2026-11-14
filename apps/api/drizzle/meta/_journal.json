@@ -57,6 +57,13 @@
       "when": 1794367802816,
       "tag": "0007_trends_dedupe",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794589315020,
+      "tag": "0008_clipping",
+      "breakpoints": true
     }
   ]
 }

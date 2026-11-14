@@ -1,3 +1,5 @@
+import { parseBool } from './auth-helpers'
+
 export const env = {
   port: Number(process.env.PORT ?? 3001),
   corsOrigin: (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
@@ -5,6 +7,11 @@ export const env = {
     .map((origin) => origin.trim())
     .filter(Boolean),
   apiKey: process.env.API_KEY?.trim() || null,
+  /**
+   * Apakah dashboard wajib login. Default aktif; set `AUTH_REQUIRED=false`
+   * hanya untuk eksperimen lokal. Otomasi tetap bisa memakai `x-api-key`.
+   */
+  authRequired: parseBool(process.env.AUTH_REQUIRED, true),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
   /** URL LLM eksternal (OpenAI-compatible). Kosong = briefing memakai fallback ekstraktif. */

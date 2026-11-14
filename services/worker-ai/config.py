@@ -125,6 +125,53 @@ class Settings:
     trends_limit_per_platform: int = int(os.getenv("TRENDS_LIMIT_PER_PLATFORM", "20"))
     #: Google (halaman trending) punya ratusan baris — simpan lebih banyak.
     trends_google_limit: int = int(os.getenv("TRENDS_GOOGLE_LIMIT", "200"))
+
+    # ── Clipping pipeline (clip.plan.md) ──────────────────────
+    #: Direktori kerja artefak: video sumber, klip, varian mutasi per akun.
+    clip_work_dir: str = os.getenv("CLIP_WORK_DIR", "storage/clipping")
+    #: Stok video filler (gameplay/satisfying) untuk mode split-screen.
+    clip_filler_dir: str = os.getenv("CLIP_FILLER_DIR", "clipping/assets/filler_library")
+    #: Batas durasi klip yang diminta ke LLM (detik).
+    clip_min_seconds: int = int(os.getenv("CLIP_MIN_SECONDS", "30"))
+    clip_max_seconds: int = int(os.getenv("CLIP_MAX_SECONDS", "75"))
+    #: Jumlah klip yang diminta per sumber.
+    clip_max_per_source: int = int(os.getenv("CLIP_MAX_PER_SOURCE", "8"))
+    #: Model Whisper: tiny/base/small/medium/large-v3.
+    clip_whisper_model: str = os.getenv("CLIP_WHISPER_MODEL", "small")
+    clip_whisper_device: str = os.getenv("CLIP_WHISPER_DEVICE", "auto")
+    #: `cpu` | `cuda` (auto memilih cuda bila tersedia).
+    clip_whisper_compute: str = os.getenv("CLIP_WHISPER_COMPUTE", "int8")
+    #: Backend transkripsi: `auto` | `api` | `mlx` | `faster-whisper`.
+    clip_whisper_backend: str = (os.getenv("CLIP_WHISPER_BACKEND") or "auto").strip().lower()
+    #: Endpoint OpenAI-compatible `/audio/transcriptions` (opsional, mis. Groq).
+    clip_whisper_api_url: str = (os.getenv("CLIP_WHISPER_API_URL") or "").strip()
+    clip_whisper_api_key: str = (os.getenv("CLIP_WHISPER_API_KEY") or "").strip()
+    clip_whisper_api_model: str = os.getenv("CLIP_WHISPER_API_MODEL", "whisper-large-v3-turbo").strip()
+    #: Ukuran chunk audio (detik) saat transkripsi bertahap agar RAM datar.
+    clip_whisper_chunk_seconds: int = int(os.getenv("CLIP_WHISPER_CHUNK_SECONDS", "180"))
+    #: Beam size Whisper (1 = greedy, 3–4x lebih cepat di CPU).
+    clip_whisper_beam_size: int = int(os.getenv("CLIP_WHISPER_BEAM_SIZE", "1"))
+    #: Batas thread CPU Whisper (`0` = otomatis setengah core fisik, maks 4).
+    clip_whisper_cpu_threads: int = int(os.getenv("CLIP_WHISPER_CPU_THREADS", "0"))
+    #: Ambil subtitle/auto-caption YouTube via yt-dlp lebih dulu sebelum Whisper.
+    clip_prefer_source_subtitles: bool = _bool("CLIP_PREFER_SOURCE_SUBTITLES", True)
+    #: Batas resolusi unduhan (mis. 720 / 1080) agar disk & decode ringan.
+    clip_ytdlp_max_height: int = int(os.getenv("CLIP_YTDLP_MAX_HEIGHT", "720"))
+    #: Interval cron tracker metrik (detik); default 3 jam.
+    clip_tracker_interval_seconds: int = int(os.getenv("CLIP_TRACKER_INTERVAL_SECONDS", "10800"))
+    #: Ambang shadowban: views di bawah ini setelah N jam → `shadowbanned`.
+    clip_shadowban_views: int = int(os.getenv("CLIP_SHADOWBAN_VIEWS", "10"))
+    clip_shadowban_hours: int = int(os.getenv("CLIP_SHADOWBAN_HOURS", "6"))
+    #: Jalankan pipeline tanpa ADB/ffmpeg (dry run) untuk pengujian alur.
+    clip_dry_run: bool = _bool("CLIP_DRY_RUN", False)
+    #: Batas sesi boost human-like per distribusi.
+    clip_boost_max_sessions: int = int(os.getenv("CLIP_BOOST_MAX_SESSIONS", "50"))
+    #: Encoder video: `auto` (VideoToolbox/NVENC bila ada) | `videotoolbox` |
+    #: `nvenc` | `none` (paksa libx264).
+    clip_hw_encode: str = os.getenv("CLIP_HW_ENCODE", "auto").strip().lower()
+    #: Jumlah thread FFmpeg. Diturunkan agar RAM stabil saat render paralel.
+    clip_ffmpeg_threads: int = int(os.getenv("CLIP_FFMPEG_THREADS", "4"))
+
     youtube_channel_ids: tuple[str, ...] = tuple(
         item.strip()
         for item in os.getenv("YOUTUBE_CHANNEL_IDS", "").split(",")

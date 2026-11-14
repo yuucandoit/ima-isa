@@ -34,7 +34,10 @@
     "worker:setup": "cd services/worker-ai && (python3.12 -m venv .venv || python3.11 -m venv .venv || python3 -m venv .venv) && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt",
     "worker:setup:ai": "cd services/worker-ai && .venv/bin/pip install -r requirements-ai.txt && .venv/bin/python -m spacy download id_core_news_lg",
     "dev:worker": "concurrently -n ai,poll,social,cluster,trends -c green,yellow,blue,red,magenta \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\" \"bun run worker:trends\"",
-    "dev:all": "concurrently -n api,web,ai,poll,social,cluster,trends -c cyan,magenta,green,yellow,blue,red,magenta \"bun run dev:api\" \"bun run dev:web\" \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\" \"bun run worker:trends\""
+    "dev:all": "concurrently -n api,web,ai,poll,social,cluster,trends,clip -c cyan,magenta,green,yellow,blue,red,magenta,white \"bun run dev:api\" \"bun run dev:web\" \"bun run worker\" \"bun run worker:poll\" \"bun run worker:social\" \"bun run worker:cluster\" \"bun run worker:trends\" \"bun run worker:clip\"",
+    "worker:clip": "bash scripts/py -m clipping.worker",
+    "dev:clip": "concurrently -n api,web,clip -c cyan,magenta,green \"bun run dev:api\" \"bun run dev:web\" \"bun run worker:clip\"",
+    "worker:setup:clip": "cd services/worker-ai && .venv/bin/pip install -r requirements-clipping.txt"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

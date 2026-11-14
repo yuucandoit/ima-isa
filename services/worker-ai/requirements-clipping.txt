@@ -1,0 +1,40 @@
+# Optional stack untuk pipeline klip (clip.plan.md).
+# Pasang dengan: cd services/worker-ai && .venv/bin/pip install -r requirements-clipping.txt
+#
+# Semua paket di sini bersifat OPSIONAL: pipeline mendeteksi ketersediaannya dan
+# turun ke mode heuristik / dry-run bila tidak terpasang.
+
+# Unduhan & metadata video (heatmap "most replayed" YouTube)
+yt-dlp>=2024.12.13
+
+# Transkripsi word-level untuk caption dinamis (lintas OS: Mac, Windows, Linux)
+faster-whisper>=1.1.0
+# Akselerasi GPU Metal khusus macOS Apple Silicon (otomatis dilewati di Windows/Linux)
+mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"
+# faster-whisper memanggil `av.open(metadata_errors=…)`, argumen yang DIHAPUS di
+# PyAV 15. Tanpa pin ini, transkripsi gagal senyap dengan
+# "open() got an unexpected keyword argument 'metadata_errors'".
+# Catatan: worker juga mendekode PCM sendiri (lihat `_decode_to_pcm`) sehingga
+# tetap jalan walau PyAV lebih baru — pin ini menjaga jalur library tetap sehat.
+av>=15
+
+# Analisis energi akustik (RMS) untuk deteksi puncak emosi
+librosa>=0.10.2
+soundfile>=0.12.1
+
+# numpy dipakai eksplisit oleh dekoder PCM (`_decode_to_pcm`)
+numpy>=1.26
+
+# Burn-in caption saat build FFmpeg tanpa libass/freetype
+pillow>=10.4.0
+
+# Scrape metrik views/likes (fallback bila ADB tak tersedia)
+playwright>=1.49.0
+
+# Face tracking untuk mode `face_reframe`
+# (butuh Python <=3.12 dan opencv-python-headless)
+mediapipe>=0.10.18
+opencv-python-headless>=4.10.0
+
+# Device farm: kontrol aplikasi native via ADB
+uiautomator2>=3.2.0

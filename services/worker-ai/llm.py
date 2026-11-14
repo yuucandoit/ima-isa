@@ -161,13 +161,20 @@ def _extract_text(provider: str, payload: dict) -> str:
     ).strip()
 
 
-def chat_complete(messages: list[dict[str, str]]) -> tuple[str, str, str]:
+def chat_complete(
+    messages: list[dict[str, str]],
+    *,
+    timeout: int | None = None,
+    max_tokens: int | None = None,
+) -> tuple[str, str, str]:
     """Return `(text, model, provider)`; raises on config/transport/HTTP errors."""
     llm = resolve_llm()
     if llm.provider == "none":
         raise RuntimeError("LLM belum dikonfigurasi: set LLM_URL di .env.")
     if not llm.model:
         raise RuntimeError("LLM_MODEL belum diisi di .env.")
+    effective_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
+    effective_timeout = timeout if timeout is not None else settings.llm_timeout
     if llm.provider == "openai":
         body = {
             "model": llm.model,
@@ -175,7 +182,7 @@ def chat_complete(messages: list[dict[str, str]]) -> tuple[str, str, str]:
             "stream": False,
             "temperature": 0.2,
             "top_p": 0.9,
-            "max_tokens": settings.llm_max_tokens,
+            "max_tokens": effective_tokens,
         }
     else:
         body = {
@@ -185,7 +192,7 @@ def chat_complete(messages: list[dict[str, str]]) -> tuple[str, str, str]:
             "options": {
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "num_predict": settings.llm_max_tokens,
+                "num_predict": effective_tokens,
             },
         }
 
@@ -193,7 +200,7 @@ def chat_complete(messages: list[dict[str, str]]) -> tuple[str, str, str]:
         llm.chat_url,
         json=body,
         headers=_headers(),
-        timeout=settings.llm_timeout,
+        timeout=effective_timeout,
     )
     if not response.ok:
         detail = " ".join(response.text.split())[:300]
@@ -201,7 +208,17 @@ def chat_complete(messages: list[dict[str, str]]) -> tuple[str, str, str]:
             f"LLM HTTP {response.status_code} ({llm.provider}) {detail}".strip()
         )
 
-    text = _extract_text(llm.provider, response.json())
+    data = response.json()
+    text = _extract_text(llm.provider, data)
     if not text:
+        if llm.provider == "openai":
+            choice = (data.get("choices") or [{}])[0] or {}
+            if choice.get("finish_reason") == "length" and (
+                (choice.get("message") or {}).get("reasoning_content")
+            ):
+                raise RuntimeError(
+                    "LLM kehabisan max_tokens saat reasoning sebelum menghasilkan jawaban; "
+                    "naikkan LLM_MAX_TOKENS di .env."
+                )
         raise RuntimeError(f"Respons LLM kosong ({llm.provider})")
     return text, llm.model, llm.provider

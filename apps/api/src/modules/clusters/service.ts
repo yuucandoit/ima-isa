@@ -85,6 +85,8 @@ export async function summarizeCluster(
   provider: string
   generatedAt: string
   cached: boolean
+  /** `true` bila LLM gagal dan ringkasan ekstraktif dipakai sebagai ganti. */
+  fallback: boolean
 } | null> {
   const detail = await getClusterDetail(id)
   if (!detail) return null
@@ -96,6 +98,7 @@ export async function summarizeCluster(
       provider: 'cached',
       generatedAt: detail.cluster.lastUpdated,
       cached: true,
+      fallback: false,
     }
   }
 
@@ -128,6 +131,7 @@ export async function summarizeCluster(
     provider: result.provider,
     generatedAt: payload.generatedAt,
     cached: false,
+    fallback: result.fallback,
   }
 }
 

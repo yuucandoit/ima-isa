@@ -77,13 +77,16 @@ export async function startRedisBridge(): Promise<void> {
       sseHub.broadcast('alert', payload, 'overview')
     } else if (channel === 'clusters:updated') {
       sseHub.broadcast('cluster', payload, 'clusters')
+    } else if (channel === 'clips:updated') {
+      sseHub.broadcast('clip', payload, 'clipping')
+      sseHub.broadcast('clip', payload, 'overview')
     }
   })
 
   try {
     await publisher.connect()
     await subscriber.connect()
-    await subscriber.subscribe('media:new', 'alerts:new', 'clusters:updated')
+    await subscriber.subscribe('media:new', 'alerts:new', 'clusters:updated', 'clips:updated')
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error)
     console.warn(`[redis] bridge unavailable: ${lastError}`)
@@ -94,6 +97,35 @@ export async function publish(channel: string, payload: unknown): Promise<boolea
   if (!publisher) return false
   try {
     await publisher.publish(channel, JSON.stringify(payload))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Publish a job to a Redis Stream consumed by the Python clipping workers
+ * (`clip:ingest`, `clip.render`, `clip.distribute`, `clip.boost`, `clip.track`).
+ * Returns false when Redis is unavailable so callers can degrade gracefully
+ * (the DB row stays in `pending` and the UI shows it as queued).
+ */
+export async function publishJob(
+  stream: string,
+  payload: Record<string, unknown>,
+  maxLen = 5_000,
+): Promise<boolean> {
+  const client = publisher
+  if (!client) return false
+  try {
+    await client.xadd(
+      stream,
+      'MAXLEN',
+      '~',
+      String(maxLen),
+      '*',
+      'payload',
+      JSON.stringify(payload),
+    )
     return true
   } catch {
     return false
